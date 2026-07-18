@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>US Swing Screener</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #14110D;
+    --bg-raised: #1C1812;
+    --line: #322C22;
+    --amber: #FFB000;
+    --amber-dim: #8C6410;
+    --text: #F1E9D8;
+    --text-dim: #8A8172;
+    --watchlist: #6E8CA0;
+    --watchlist-dim: #3A4A54;
+    --red: #C4553F;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Mono', monospace;
+    -webkit-font-smoothing:antialiased;
+  }
+  .display{ font-family:'Space Grotesk', sans-serif; }
+
+  header{
+    padding:28px 24px 20px;
+    border-bottom:1px solid var(--line);
+  }
+  .eyebrow{
+    font-size:11px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--amber-dim);
+    margin-bottom:6px;
+  }
+  h1{
+    font-size:clamp(24px, 4vw, 34px);
+    font-weight:700;
+    margin:0 0 10px;
+    letter-spacing:-0.01em;
+  }
+  .meta-row{
+    display:flex;
+    gap:20px;
+    flex-wrap:wrap;
+    font-size:12px;
+    color:var(--text-dim);
+  }
+  .meta-row b{ color:var(--text); font-weight:600; }
+
+  /* ticker tape */
+  .tape-wrap{
+    border-bottom:1px solid var(--line);
+    background:var(--bg-raised);
+    overflow:hidden;
+    white-space:nowrap;
+    position:relative;
+  }
+  .tape-wrap::before, .tape-wrap::after{
+    content:"";
+    position:absolute; top:0; bottom:0; width:40px; z-index:2;
+  }
+  .tape-wrap::before{ left:0; background:linear-gradient(90deg, var(--bg-raised), transparent); }
+  .tape-wrap::after{ right:0; background:linear-gradient(270deg, var(--bg-raised), transparent); }
+  .tape{
+    display:inline-flex;
+    padding:10px 0;
+    animation: scroll-left 40s linear infinite;
+  }
+  .tape span{
+    padding:0 22px;
+    font-size:13px;
+    color:var(--amber);
+    border-right:1px solid var(--line);
+  }
+  .tape span em{
+    font-style:normal;
+    color:var(--text-dim);
+    margin-left:8px;
+  }
+  @keyframes scroll-left{
+    from{ transform:translateX(0); }
+    to{ transform:translateX(-50%); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .tape{ animation:none; overflow-x:auto; }
+  }
+
+  main{ padding:22px 24px 60px; max-width:1100px; margin:0 auto; }
+
+  .tabs{
+    display:flex;
+    gap:4px;
+    margin-bottom:18px;
+    border-bottom:1px solid var(--line);
+  }
+  .tab{
+    background:none;
+    border:none;
+    color:var(--text-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    padding:10px 14px;
+    cursor:pointer;
+    border-bottom:2px solid transparent;
+  }
+  .tab.active{ color:var(--text); border-bottom-color:var(--amber); }
+  .tab .count{ color:var(--text-dim); margin-left:6px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  thead th{
+    text-align:left;
+    font-weight:500;
+    font-size:11px;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    padding:8px 10px;
+    border-bottom:1px solid var(--line);
+  }
+  tbody tr{ border-bottom:1px solid var(--line); }
+  tbody tr:hover{ background:var(--bg-raised); }
+  tbody td{ padding:10px; vertical-align:top; }
+  .row-kuat{ border-left:3px solid var(--amber); }
+  .row-watchlist{ border-left:3px solid var(--watchlist); }
+  .row-no{ border-left:3px solid transparent; }
+  .ticker{ font-weight:600; color:var(--text); letter-spacing:0.02em; }
+  .score{ font-variant-numeric:tabular-nums; }
+  .score-kuat{ color:var(--amber); font-weight:600; }
+  .score-watchlist{ color:var(--watchlist); }
+  .score-no{ color:var(--text-dim); }
+  .num{ font-variant-numeric:tabular-nums; color:var(--text-dim); }
+  .pos{ color:#8FB88A; }
+  .neg{ color:var(--red); }
+  .signals{ display:flex; flex-wrap:wrap; gap:4px; max-width:220px; }
+  .sig{
+    font-size:10px;
+    padding:2px 6px;
+    border:1px solid var(--line);
+    border-radius:2px;
+    color:var(--text-dim);
+    white-space:nowrap;
+  }
+
+  .state{
+    padding:60px 20px;
+    text-align:center;
+    color:var(--text-dim);
+    font-size:14px;
+  }
+  .state .display{ color:var(--text); font-size:18px; margin-bottom:8px; }
+
+  footer{
+    padding:18px 24px 30px;
+    text-align:center;
+    font-size:11px;
+    color:var(--text-dim);
+  }
+  footer a{ color:var(--amber-dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">anyapp.my.id &middot; personal screener</div>
+  <h1 class="display">US Swing Screener</h1>
+  <div class="meta-row">
+    <div>Universe: <b id="stat-universe">—</b> ticker</div>
+    <div>Update terakhir: <b id="stat-date">—</b></div>
+    <div>Kuat: <b id="stat-kuat">—</b></div>
+    <div>Watchlist: <b id="stat-watchlist">—</b></div>
+  </div>
+</header>
+
+<div class="tape-wrap">
+  <div class="tape" id="tape">
+    <span>Memuat data…</span>
+  </div>
+</div>
+
+<main>
+  <div class="tabs">
+    <button class="tab active" data-tier="kuat">Kuat <span class="count" id="count-kuat"></span></button>
+    <button class="tab" data-tier="watchlist">Watchlist <span class="count" id="count-watchlist"></span></button>
+    <button class="tab" data-tier="all">Semua <span class="count" id="count-all"></span></button>
+  </div>
+
+  <div id="content">
+    <div class="state">Memuat data dari Supabase…</div>
+  </div>
+</main>
+
+<footer>
+  Skor breakout dikalibrasi dari backtest 3 tahun &middot; ≥80 kuat, 40–79 watchlist &middot; bukan rekomendasi finansial
+</footer>
+
+<script>
+  // ---- Config ----
+  const SUPABASE_URL = "https://pklhkbcglltayrdqeeph.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_m-l3DTy0JPROsI_FtvV7_Q_uqghyhuR";
+
+  let rows = [];
+  let activeTier = "kuat";
+
+  async function loadData(){
+    try{
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/latest_screener?select=*&order=score.desc`,
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      );
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      rows = await res.json();
+      render();
+    }catch(err){
+      document.getElementById("content").innerHTML =
+        `<div class="state"><div class="display">Gagal memuat data</div>${escapeHtml(err.message)} — cek apakah notebook produksi sudah pernah dijalankan.</div>`;
+    }
+  }
+
+  function tierOf(r){ return (r.decision && r.decision.tier) || "no_signal"; }
+
+  function render(){
+    if(rows.length === 0){
+      document.getElementById("content").innerHTML =
+        `<div class="state"><div class="display">Belum ada data</div>Jalankan notebook produksi di Colab untuk mengisi daily_features &amp; strategy_results.</div>`;
+      document.getElementById("tape").innerHTML = `<span>Belum ada data</span>`;
+      return;
+    }
+
+    const latestDate = rows[0].date;
+    const kuat = rows.filter(r => tierOf(r) === "kuat");
+    const watchlist = rows.filter(r => tierOf(r) === "watchlist");
+
+    document.getElementById("stat-universe").textContent = rows.length;
+    document.getElementById("stat-date").textContent = latestDate;
+    document.getElementById("stat-kuat").textContent = kuat.length;
+    document.getElementById("stat-watchlist").textContent = watchlist.length;
+    document.getElementById("count-kuat").textContent = kuat.length;
+    document.getElementById("count-watchlist").textContent = watchlist.length;
+    document.getElementById("count-all").textContent = rows.length;
+
+    const tapeItems = kuat.length ? kuat : rows.slice(0, 10);
+    document.getElementById("tape").innerHTML =
+      [...tapeItems, ...tapeItems].map(r =>
+        `<span>${escapeHtml(r.ticker)}<em>${r.score}</em></span>`
+      ).join("");
+
+    renderTable();
+  }
+
+  function renderTable(){
+    let filtered = rows;
+    if(activeTier !== "all"){
+      filtered = rows.filter(r => tierOf(r) === activeTier);
+    }
+
+    if(filtered.length === 0){
+      document.getElementById("content").innerHTML =
+        `<div class="state">Tidak ada ticker di kategori ini hari ini.</div>`;
+      return;
+    }
+
+    const html = `
+      <table>
+        <thead>
+          <tr>
+            <th>Ticker</th><th>Skor</th><th>Close</th><th>RSI14</th>
+            <th>Jarak MA20</th><th>Rel. Volume</th><th>RS vs SPY</th><th>Sinyal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filtered.map(rowHtml).join("")}
+        </tbody>
+      </table>`;
+    document.getElementById("content").innerHTML = html;
+  }
+
+  function rowHtml(r){
+    const tier = tierOf(r);
+    const rowClass = tier === "kuat" ? "row-kuat" : tier === "watchlist" ? "row-watchlist" : "row-no";
+    const scoreClass = tier === "kuat" ? "score-kuat" : tier === "watchlist" ? "score-watchlist" : "score-no";
+    const dist = r.dist_ma20_pct;
+    const rs = r.relative_strength_spy;
+    const signals = Array.isArray(r.signals) ? r.signals : [];
+
+    return `
+      <tr class="${rowClass}">
+        <td class="ticker">${escapeHtml(r.ticker)}</td>
+        <td class="score ${scoreClass}">${r.score}</td>
+        <td class="num">${fmt(r.close)}</td>
+        <td class="num">${fmt(r.rsi14)}</td>
+        <td class="num ${dist >= 0 ? 'pos' : 'neg'}">${fmt(dist)}%</td>
+        <td class="num">${fmt(r.relative_volume)}x</td>
+        <td class="num ${rs >= 0 ? 'pos' : 'neg'}">${fmt(rs)}%</td>
+        <td><div class="signals">${signals.map(s => `<span class="sig">${escapeHtml(s)}</span>`).join("")}</div></td>
+      </tr>`;
+  }
+
+  function fmt(n){ return (n === null || n === undefined) ? "—" : Number(n).toFixed(2); }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  document.querySelectorAll(".tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelector(".tab.active").classList.remove("active");
+      btn.classList.add("active");
+      activeTier = btn.dataset.tier;
+      renderTable();
+    });
+  });
+
+  loadData();
+</script>
+
+</body>
+</html>
