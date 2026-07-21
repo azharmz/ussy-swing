@@ -154,13 +154,26 @@
 
     <div class="note">
       Skor breakout (0-100) dikalibrasi dari trend, momentum, volume, dan relative strength vs SPY.
-      Tier <b>Kuat</b> saat ini menandai score &ge;80 — catatan jujur: validasi backtest baru
-      benar-benar menguji kondisi score=100 (semua 4 syarat terpenuhi); kombinasi 3-dari-4 syarat
-      (score 80-85) belum divalidasi terpisah. Bukan rekomendasi finansial.
+      Tier <b>Kuat</b> menandai score =100 (semua 4 syarat terpenuhi) — hasil backtest breakdown
+      per level score (3 tahun, 197 ticker): win rate 59.8%, profit factor 1.85, median PnL +2.43%.
+      Score 80-85 (3 dari 4 syarat) median PnL-nya justru negatif meski profit factor agregat >1,
+      jadi masuk watchlist, bukan actionable. Bukan rekomendasi finansial.
     </div>
 
     <div class="stats-grid" id="statsGrid"></div>
 
+    <div class="section-h" style="margin-top:4px;">Sinyal Trading Aktif</div>
+    <div class="table-wrap" style="margin-bottom:10px;">
+      <table>
+        <thead>
+          <tr><th>Ticker</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
+        </thead>
+        <tbody id="signalsBody"></tbody>
+      </table>
+    </div>
+    <div class="note" id="performanceNote"></div>
+
+    <div class="section-h">Screening Harian (Snapshot)</div>
     <div class="tabs" id="mainTabs">
       <div class="tab active" data-tier="kuat">Kuat <span class="count-tag" id="count-kuat"></span></div>
       <div class="tab" data-tier="watchlist">Watchlist <span class="count-tag" id="count-watchlist"></span></div>
@@ -210,17 +223,20 @@
   const SUPABASE_KEY = "sb_publishable_m-l3DTy0JPROsI_FtvV7_Q_uqghyhuR";
 
   let rows = [];
+  let signalRows = [];
   let activeTier = "kuat";
   let searchTerm = "";
 
+  async function sbFetch(path){
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    if(!res.ok) throw new Error(`HTTP ${res.status} @ ${path}`);
+    return res.json();
+  }
+
   async function loadData(){
     try{
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/latest_screener?select=*&order=score.desc`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
-      );
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      rows = await res.json();
+      rows = await sbFetch("latest_screener?select=*&order=score.desc");
       document.getElementById("loadingState").style.display = "none";
 
       if(rows.length === 0){
@@ -229,12 +245,56 @@
       }
       document.getElementById("dashboard").style.display = "block";
       render();
+
+      // sinyal & performa dimuat terpisah — kalau tabel ini belum ada
+      // (migrasi belum jalan) jangan sampai gagalkan seluruh dashboard.
+      try{
+        signalRows = await sbFetch("active_signals?select=*");
+        renderSignals();
+      }catch(e){ console.warn("active_signals belum tersedia:", e.message); }
+
+      try{
+        const perf = await sbFetch("signal_performance?select=*");
+        renderPerformance(perf[0]);
+      }catch(e){ console.warn("signal_performance belum tersedia:", e.message); }
+
     }catch(err){
       document.getElementById("loadingState").style.display = "none";
       document.getElementById("errorState").style.display = "block";
       document.getElementById("errorMsg").textContent = err.message;
     }
   }
+
+  function renderSignals(){
+    if(signalRows.length === 0){
+      document.getElementById("signalsBody").innerHTML =
+        `<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal aktif saat ini.</td></tr>`;
+      return;
+    }
+    document.getElementById("signalsBody").innerHTML = signalRows.map(s => `
+      <tr>
+        <td class="symbol">${escapeHtml(s.ticker)}</td>
+        <td><span class="badge badge-${s.status==='entered'?'kuat':'watchlist'}">${s.status.toUpperCase()}</span></td>
+        <td class="mono">${escapeHtml(s.signal_date)}</td>
+        <td class="mono">${fmt(s.entry_price)}</td>
+        <td class="mono neg">${fmt(s.stop_loss)}</td>
+        <td class="mono pos">${fmt(s.take_profit)}</td>
+        <td class="mono">${s.days_in_status}d</td>
+      </tr>`).join("");
+  }
+
+  function renderPerformance(p){
+    if(!p || p.total_resolved === 0){
+      document.getElementById("performanceNote").textContent =
+        "Belum ada sinyal yang selesai (tp_hit/sl_hit/closed_timeout) untuk dihitung performanya.";
+      return;
+    }
+    document.getElementById("performanceNote").innerHTML =
+      `Performa sinyal selesai (n=${p.total_resolved}, sinyal <b>missed</b> dikeluarkan dari perhitungan): ` +
+      `win rate <b>${p.win_rate_pct}%</b>, avg PnL <b>${p.avg_pnl_pct}%</b> ` +
+      `— tp_hit: ${p.tp_hit_count}, sl_hit: ${p.sl_hit_count}, closed_timeout: ${p.closed_timeout_count}, missed: ${p.missed_count}.`;
+  }
+
 
   function tierOf(r){ return (r.decision && r.decision.tier) || "no_signal"; }
 
@@ -247,8 +307,8 @@
     document.getElementById("statsGrid").innerHTML = [
       ["Universe", rows.length, ""],
       ["Update Terakhir", rows[0].date, ""],
-      ["Kuat", kuat.length, "score &ge;80"],
-      ["Watchlist", watchlist.length, "score 40-79"],
+      ["Kuat", kuat.length, "score =100"],
+      ["Watchlist", watchlist.length, "score 40-99"],
       ["No Signal", noSignal.length, "score <40"],
       ["Avg Score (Kuat)", avgScoreKuat, ""],
     ].map(([label,val,sub]) => `
