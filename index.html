@@ -173,40 +173,47 @@
 
     <div class="stats-grid" id="statsGrid"></div>
 
-    <div class="section-h" style="margin-top:4px;">Sinyal Trading Aktif</div>
-    <div class="table-wrap" style="margin-bottom:10px;">
-      <table>
-        <thead>
-          <tr><th>Ticker</th><th>Strategi</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
-        </thead>
-        <tbody id="signalsBody"></tbody>
+    <div class="tabs" id="viewToggle" style="margin-top:6px;">
+      <div class="tab active" data-view="signals">Sinyal Trading Aktif</div>
+      <div class="tab" data-view="snapshot">Screening Harian (Snapshot)</div>
+    </div>
+
+    <div id="viewSignals">
+      <div class="table-wrap" style="margin-bottom:10px;">
+        <table>
+          <thead>
+            <tr><th>Ticker</th><th>Strategi</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
+          </thead>
+          <tbody id="signalsBody"></tbody>
+        </table>
+      </div>
+      <div class="note" id="performanceNote"></div>
+    </div>
+
+    <div id="viewSnapshot" style="display:none">
+      <div class="tabs" id="mainTabs">
+        <div class="tab active" data-tier="kuat">Kuat <span class="count-tag" id="count-kuat"></span></div>
+        <div class="tab" data-tier="watchlist">Watchlist <span class="count-tag" id="count-watchlist"></span></div>
+        <div class="tab" data-tier="all">Semua <span class="count-tag" id="count-all"></span></div>
+      </div>
+
+      <div class="filter-bar">
+        <input type="text" id="searchSymbol" placeholder="Cari ticker...">
+        <div class="spacer"></div>
+        <span class="count-tag" id="rowCount"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticker</th><th>Strategi</th><th>Score</th><th>Tier</th><th>Close</th><th>RSI14</th>
+              <th>Jarak MA20</th><th>Rel. Volume</th><th>RS vs SPY</th><th>Sinyal</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
       </table>
     </div>
-    <div class="note" id="performanceNote"></div>
-
-    <div class="section-h">Screening Harian (Snapshot)</div>
-    <div class="tabs" id="mainTabs">
-      <div class="tab active" data-tier="kuat">Kuat <span class="count-tag" id="count-kuat"></span></div>
-      <div class="tab" data-tier="watchlist">Watchlist <span class="count-tag" id="count-watchlist"></span></div>
-      <div class="tab" data-tier="all">Semua <span class="count-tag" id="count-all"></span></div>
-    </div>
-
-    <div class="filter-bar">
-      <input type="text" id="searchSymbol" placeholder="Cari ticker...">
-      <div class="spacer"></div>
-      <span class="count-tag" id="rowCount"></span>
-    </div>
-
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Ticker</th><th>Strategi</th><th>Score</th><th>Tier</th><th>Close</th><th>RSI14</th>
-            <th>Jarak MA20</th><th>Rel. Volume</th><th>RS vs SPY</th><th>Sinyal</th>
-          </tr>
-        </thead>
-        <tbody id="tableBody"></tbody>
-      </table>
     </div>
   </div>
 
@@ -429,12 +436,21 @@
     return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
 
-  document.querySelectorAll(".tab").forEach(tab => {
+  document.querySelectorAll("#mainTabs .tab").forEach(tab => {
     tab.addEventListener("click", () => {
-      document.querySelector(".tab.active").classList.remove("active");
+      document.querySelector("#mainTabs .tab.active").classList.remove("active");
       tab.classList.add("active");
       activeTier = tab.dataset.tier;
       renderTable();
+    });
+  });
+  document.querySelectorAll("#viewToggle .tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelector("#viewToggle .tab.active").classList.remove("active");
+      tab.classList.add("active");
+      const view = tab.dataset.view;
+      document.getElementById("viewSignals").style.display = view === "signals" ? "block" : "none";
+      document.getElementById("viewSnapshot").style.display = view === "snapshot" ? "block" : "none";
     });
   });
   document.getElementById("searchSymbol").addEventListener("input", e => {
