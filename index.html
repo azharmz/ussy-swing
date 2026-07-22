@@ -153,11 +153,22 @@
   <div id="dashboard" style="display:none">
 
     <div class="note">
-      Skor breakout (0-100) dikalibrasi dari trend, momentum, volume, dan relative strength vs SPY.
-      Tier <b>Kuat</b> menandai score =100 (semua 4 syarat terpenuhi) — hasil backtest breakdown
-      per level score (3 tahun, 197 ticker): win rate 59.8%, profit factor 1.85, median PnL +2.43%.
-      Score 80-85 (3 dari 4 syarat) median PnL-nya justru negatif meski profit factor agregat >1,
-      jadi masuk watchlist, bukan actionable. Bukan rekomendasi finansial.
+      Skor 0-100 tiap strategi dikalibrasi lewat backtest 3 tahun terpisah. <b>Breakout</b>:
+      tier Kuat = score=100 (trend+momentum+volume+RS sekaligus); tier Watchlist di bawah itu
+      belum tervalidasi solid. <b>Pullback</b>: tier Kuat = score=100 (trend+momentum, RS dibuang
+      karena menurunkan robustness); tier Watchlist = score 50 (trend saja, momentum belum masuk
+      zona pullback) — berbeda dari breakout, kombinasi ini SUDAH divalidasi terpisah dan tetap
+      lolos ambang (win rate 49.4%, profit factor 1.18 setelah outlier dibuang), meski lebih lemah
+      dari tier Kuat. Hanya tier Kuat yang menghasilkan sinyal entry/SL/TP aktual. Bukan
+      rekomendasi finansial.
+    </div>
+
+    <div class="filter-bar" style="margin-bottom:14px;">
+      <select id="strategyFilter" style="background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-size:12.5px;font-family:'IBM Plex Sans',sans-serif;">
+        <option value="all">Semua Strategi</option>
+        <option value="breakout">Breakout</option>
+        <option value="pullback">Pullback</option>
+      </select>
     </div>
 
     <div class="stats-grid" id="statsGrid"></div>
@@ -166,7 +177,7 @@
     <div class="table-wrap" style="margin-bottom:10px;">
       <table>
         <thead>
-          <tr><th>Ticker</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
+          <tr><th>Ticker</th><th>Strategi</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
         </thead>
         <tbody id="signalsBody"></tbody>
       </table>
@@ -190,7 +201,7 @@
       <table>
         <thead>
           <tr>
-            <th>Ticker</th><th>Score</th><th>Tier</th><th>Close</th><th>RSI14</th>
+            <th>Ticker</th><th>Strategi</th><th>Score</th><th>Tier</th><th>Close</th><th>RSI14</th>
             <th>Jarak MA20</th><th>Rel. Volume</th><th>RS vs SPY</th><th>Sinyal</th>
           </tr>
         </thead>
@@ -225,6 +236,7 @@
   let rows = [];
   let signalRows = [];
   let activeTier = "kuat";
+  let activeStrategy = "all";
   let searchTerm = "";
 
   async function sbFetch(path){
@@ -266,14 +278,16 @@
   }
 
   function renderSignals(){
-    if(signalRows.length === 0){
+    const filtered = activeStrategy === "all" ? signalRows : signalRows.filter(s => s.strategy === activeStrategy);
+    if(filtered.length === 0){
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="7" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal aktif saat ini.</td></tr>`;
+        `<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal aktif saat ini.</td></tr>`;
       return;
     }
-    document.getElementById("signalsBody").innerHTML = signalRows.map(s => `
+    document.getElementById("signalsBody").innerHTML = filtered.map(s => `
       <tr>
         <td class="symbol">${escapeHtml(s.ticker)}</td>
+        <td>${strategyBadge(s.strategy)}</td>
         <td><span class="badge badge-${s.status==='entered'?'kuat':'watchlist'}">${s.status.toUpperCase()}</span></td>
         <td class="mono">${escapeHtml(s.signal_date)}</td>
         <td class="mono">${fmt(s.entry_price)}</td>
@@ -281,6 +295,12 @@
         <td class="mono pos">${fmt(s.take_profit)}</td>
         <td class="mono">${s.days_in_status}d</td>
       </tr>`).join("");
+  }
+
+  function strategyBadge(strategy){
+    const label = strategy === "breakout" ? "BREAKOUT" : strategy === "pullback" ? "PULLBACK" : strategy.toUpperCase();
+    const color = strategy === "breakout" ? "var(--blue)" : "var(--purple)";
+    return `<span class="mono" style="font-size:10.5px;color:${color};">${label}</span>`;
   }
 
   function renderPerformance(p){
@@ -299,13 +319,14 @@
   function tierOf(r){ return (r.decision && r.decision.tier) || "no_signal"; }
 
   function render(){
-    const kuat = rows.filter(r => tierOf(r) === "kuat");
-    const watchlist = rows.filter(r => tierOf(r) === "watchlist");
-    const noSignal = rows.filter(r => tierOf(r) === "no_signal");
+    const scoped = activeStrategy === "all" ? rows : rows.filter(r => r.strategy === activeStrategy);
+    const kuat = scoped.filter(r => tierOf(r) === "kuat");
+    const watchlist = scoped.filter(r => tierOf(r) === "watchlist");
+    const noSignal = scoped.filter(r => tierOf(r) === "no_signal");
     const avgScoreKuat = kuat.length ? (kuat.reduce((s,r)=>s+r.score,0)/kuat.length).toFixed(1) : "—";
 
     document.getElementById("statsGrid").innerHTML = [
-      ["Universe", rows.length, ""],
+      ["Universe", scoped.length, activeStrategy === "all" ? "(gabungan semua strategi)" : ""],
       ["Update Terakhir", rows[0].date, ""],
       ["Kuat", kuat.length, "score =100"],
       ["Watchlist", watchlist.length, "score 40-99"],
@@ -320,13 +341,14 @@
 
     document.getElementById("count-kuat").textContent = kuat.length;
     document.getElementById("count-watchlist").textContent = watchlist.length;
-    document.getElementById("count-all").textContent = rows.length;
+    document.getElementById("count-all").textContent = scoped.length;
 
     renderTable();
   }
 
   function renderTable(){
-    let filtered = activeTier === "all" ? rows : rows.filter(r => tierOf(r) === activeTier);
+    let filtered = activeStrategy === "all" ? rows : rows.filter(r => r.strategy === activeStrategy);
+    filtered = activeTier === "all" ? filtered : filtered.filter(r => tierOf(r) === activeTier);
     if(searchTerm){
       filtered = filtered.filter(r => r.ticker.toLowerCase().includes(searchTerm.toLowerCase()));
     }
@@ -335,7 +357,7 @@
 
     if(filtered.length === 0){
       document.getElementById("tableBody").innerHTML =
-        `<tr><td colspan="9" style="text-align:center;color:var(--text-dim);padding:30px;">Tidak ada ticker di kategori ini.</td></tr>`;
+        `<tr><td colspan="10" style="text-align:center;color:var(--text-dim);padding:30px;">Tidak ada ticker di kategori ini.</td></tr>`;
       return;
     }
 
@@ -347,6 +369,7 @@
       return `
         <tr onclick="openModal(${origIdx})">
           <td class="symbol">${escapeHtml(r.ticker)}</td>
+          <td>${strategyBadge(r.strategy)}</td>
           <td class="mono">${r.score}</td>
           <td><span class="badge badge-${tier}">${tierLabel(tier)}</span></td>
           <td class="mono">${fmt(r.close)}</td>
@@ -374,7 +397,10 @@
     html += `<div class="section-h">Ringkasan Skor</div><div class="field-grid">`;
     html += fieldHtml("Score", r.score);
     html += fieldHtml("Trend", d.trend);
-    html += fieldHtml("Jarak MA20", fmt(d.distance_ma20_pct) + "%");
+    if(d.distance_ma20_pct != null) html += fieldHtml("Jarak MA20", fmt(d.distance_ma20_pct) + "%");
+    if(d.entry_price_ref != null) html += fieldHtml("Entry Ref (MA20)", fmt(d.entry_price_ref));
+    if(d.stop_loss_ref != null) html += fieldHtml("Stop Loss Ref", fmt(d.stop_loss_ref));
+    if(d.take_profit_ref != null) html += fieldHtml("Take Profit Ref", fmt(d.take_profit_ref));
     html += `</div>`;
 
     html += `<div class="section-h">Harga &amp; Indikator</div><div class="field-grid">`;
@@ -414,6 +440,11 @@
   document.getElementById("searchSymbol").addEventListener("input", e => {
     searchTerm = e.target.value;
     renderTable();
+  });
+  document.getElementById("strategyFilter").addEventListener("change", e => {
+    activeStrategy = e.target.value;
+    render();
+    renderSignals();
   });
 
   loadData();
