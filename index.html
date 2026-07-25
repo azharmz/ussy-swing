@@ -159,8 +159,12 @@
       karena menurunkan robustness); tier Watchlist = score 50 (trend saja, momentum belum masuk
       zona pullback) — berbeda dari breakout, kombinasi ini SUDAH divalidasi terpisah dan tetap
       lolos ambang (win rate 49.4%, profit factor 1.18 setelah outlier dibuang), meski lebih lemah
-      dari tier Kuat. Hanya tier Kuat yang menghasilkan sinyal entry/SL/TP aktual. Bukan
-      rekomendasi finansial.
+      dari tier Kuat. Hanya tier Kuat yang menghasilkan sinyal entry/SL/TP aktual.
+      <b>Status: masa observasi live 3 bulan</b> — kriteria kedua strategi sengaja tidak diubah
+      dulu, biar hasil live jadi validasi out-of-sample yang jujur. <span style="color:var(--red)">&#9888; Breakout</span>
+      diketahui fragile: profit factor jatuh di bawah breakeven begitu outlier ticker dibuang atau
+      slippage realistis disimulasikan — dipertahankan jalan buat lihat apakah ini benar collapse di
+      dunia nyata atau tidak. Bukan rekomendasi finansial.
     </div>
 
     <div class="filter-bar" style="margin-bottom:14px;">
@@ -174,7 +178,7 @@
     <div class="stats-grid" id="statsGrid"></div>
 
     <div class="tabs" id="viewToggle" style="margin-top:6px;">
-      <div class="tab active" data-view="signals">Sinyal Trading Aktif</div>
+      <div class="tab active" data-view="signals">Sinyal</div>
       <div class="tab" data-view="snapshot">Screening Harian (Snapshot)</div>
     </div>
 
@@ -182,10 +186,15 @@
       <div class="table-wrap" style="margin-bottom:10px;">
         <table>
           <thead>
-            <tr><th>Ticker</th><th>Strategi</th><th>Status</th><th>Tgl Sinyal</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th></tr>
+            <tr><th>Ticker</th><th>Strategi</th><th>Entry</th><th>Outcome</th><th>Tgl Sinyal</th><th>Level Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th><th>Harga Exit</th><th>PnL</th></tr>
           </thead>
           <tbody id="signalsBody"></tbody>
         </table>
+      </div>
+      <div class="filter-bar" style="margin-bottom:10px;">
+        <button id="pagePrev" class="tab" style="border:1px solid var(--line);border-radius:var(--radius);">&larr; Sebelumnya</button>
+        <span class="count-tag" id="pageIndicator"></span>
+        <button id="pageNext" class="tab" style="border:1px solid var(--line);border-radius:var(--radius);">Berikutnya &rarr;</button>
       </div>
       <div class="note" id="performanceNote"></div>
     </div>
@@ -246,11 +255,37 @@
   let activeStrategy = "all";
   let searchTerm = "";
 
+  const PAGE_SIZE = 30;
+  let currentPage = 0;
+  let hasNextPage = false;
+
   async function sbFetch(path){
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
     if(!res.ok) throw new Error(`HTTP ${res.status} @ ${path}`);
     return res.json();
+  }
+
+  async function loadSignalsPage(){
+    const offset = currentPage * PAGE_SIZE;
+    const strategyFilter = activeStrategy === "all" ? "" : `&strategy=eq.${activeStrategy}`;
+    try{
+      const data = await sbFetch(
+        `trade_signals?select=*&order=signal_date.desc,id.desc&limit=${PAGE_SIZE + 1}&offset=${offset}${strategyFilter}`
+      );
+      hasNextPage = data.length > PAGE_SIZE;
+      signalRows = data.slice(0, PAGE_SIZE);
+      renderSignals();
+      updatePaginationControls();
+    }catch(e){ console.warn("trade_signals belum bisa dimuat:", e.message); }
+  }
+
+  function updatePaginationControls(){
+    document.getElementById("pageIndicator").textContent = `Halaman ${currentPage + 1}`;
+    document.getElementById("pagePrev").style.opacity = currentPage === 0 ? "0.4" : "1";
+    document.getElementById("pagePrev").disabled = currentPage === 0;
+    document.getElementById("pageNext").style.opacity = hasNextPage ? "1" : "0.4";
+    document.getElementById("pageNext").disabled = !hasNextPage;
   }
 
   async function loadData(){
@@ -267,10 +302,7 @@
 
       // sinyal & performa dimuat terpisah — kalau tabel ini belum ada
       // (migrasi belum jalan) jangan sampai gagalkan seluruh dashboard.
-      try{
-        signalRows = await sbFetch("active_signals?select=*");
-        renderSignals();
-      }catch(e){ console.warn("active_signals belum tersedia:", e.message); }
+      await loadSignalsPage();
 
       try{
         const perf = await sbFetch("signal_performance?select=*");
@@ -285,29 +317,76 @@
   }
 
   function renderSignals(){
-    const filtered = activeStrategy === "all" ? signalRows : signalRows.filter(s => s.strategy === activeStrategy);
+    const filtered = signalRows;
     if(filtered.length === 0){
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal aktif saat ini.</td></tr>`;
+        `<tr><td colspan="11" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
       return;
     }
-    document.getElementById("signalsBody").innerHTML = filtered.map(s => `
+    document.getElementById("signalsBody").innerHTML = filtered.map(s => {
+      const pnlClass = s.pnl_pct == null ? "" : (s.pnl_pct >= 0 ? "pos" : "neg");
+      return `
       <tr>
         <td class="symbol">${escapeHtml(s.ticker)}</td>
         <td>${strategyBadge(s.strategy)}</td>
-        <td><span class="badge badge-${s.status==='entered'?'kuat':'watchlist'}">${s.status.toUpperCase()}</span></td>
+        <td>${entryStatusBadge(s)}</td>
+        <td>${outcomeBadge(s)}</td>
         <td class="mono">${escapeHtml(s.signal_date)}</td>
         <td class="mono">${fmt(s.entry_price)}</td>
         <td class="mono neg">${fmt(s.stop_loss)}</td>
         <td class="mono pos">${fmt(s.take_profit)}</td>
-        <td class="mono">${s.days_in_status}d</td>
-      </tr>`).join("");
+        <td class="mono">${daysElapsed(s)}d</td>
+        <td class="mono">${s.exit_price == null ? "—" : fmt(s.exit_price)}</td>
+        <td class="mono ${pnlClass}">${s.pnl_pct == null ? "—" : fmt(s.pnl_pct) + "%"}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // Sumbu 1: status entry (fakta -- sudah/belum ke-fill)
+  function entryStatusBadge(s){
+    if(s.status === "entered"){
+      return `<span class="badge badge-kuat">ENTRY @ ${fmt(s.entry_price_actual)}</span>`;
+    }
+    return `<span class="badge badge-watchlist">BELUM ENTRY</span>`;
+  }
+
+  // Sumbu 2: outcome (berjalan terus -> TP/SL/Timeout/Expired).
+  // Panel ini cuma nampilin sinyal aktif (pending/entered), jadi outcome
+  // di sini selalu "Running" -- riwayat yang sudah resolved (TP/SL/Timeout/
+  // Expired) ada di ringkasan performa di bawah, bukan per-baris di sini.
+  function outcomeBadge(s){
+    const map = {
+      pending: ["RUNNING", "watchlist"],
+      entered: ["RUNNING", "watchlist"],
+      tp_hit: ["TP", "kuat"],
+      sl_hit: ["SL", "no_signal"],
+      closed_timeout: ["TIMEOUT", "no_signal"],
+      missed: ["EXPIRED", "no_signal"],
+    };
+    const [label, cls] = map[s.status] || [s.status.toUpperCase(), "no_signal"];
+    return `<span class="badge badge-${cls}">${label}</span>`;
+  }
+
+  // Hari berjalan berkelanjutan sejak sinyal muncul (kalender, bukan hari
+  // bursa -- pendekatan, bukan presisi mutlak). Tidak reset saat status
+  // pindah dari pending ke entered, beda dari days_in_status internal.
+  // Kalau sinyal sudah selesai (ada exit_date), berhenti di situ -- bukan
+  // terus nambah sampai hari ini.
+  function daysElapsed(s){
+    const signalDate = new Date(s.signal_date + "T00:00:00");
+    const endDate = s.exit_date ? new Date(s.exit_date + "T00:00:00") : new Date();
+    endDate.setHours(0,0,0,0);
+    const diffMs = endDate - signalDate;
+    return Math.max(0, Math.round(diffMs / 86400000));
   }
 
   function strategyBadge(strategy){
     const label = strategy === "breakout" ? "BREAKOUT" : strategy === "pullback" ? "PULLBACK" : strategy.toUpperCase();
     const color = strategy === "breakout" ? "var(--blue)" : "var(--purple)";
-    return `<span class="mono" style="font-size:10.5px;color:${color};">${label}</span>`;
+    const warn = strategy === "breakout"
+      ? `<span title="Profit factor jatuh di bawah breakeven (0.93) setelah top-10 ticker outlier dibuang & setelah simulasi slippage 0.50% -- lihat catatan audit robustness. Sedang masa observasi live 3 bulan." style="color:var(--red);cursor:help;margin-left:3px;">&#9888;</span>`
+      : "";
+    return `<span class="mono" style="font-size:10.5px;color:${color};">${label}</span>${warn}`;
   }
 
   function renderPerformance(p){
@@ -459,11 +538,31 @@
   });
   document.getElementById("strategyFilter").addEventListener("change", e => {
     activeStrategy = e.target.value;
+    currentPage = 0;
     render();
-    renderSignals();
+    loadSignalsPage();
+  });
+  document.getElementById("pagePrev").addEventListener("click", () => {
+    if(currentPage === 0) return;
+    currentPage -= 1;
+    loadSignalsPage();
+  });
+  document.getElementById("pageNext").addEventListener("click", () => {
+    if(!hasNextPage) return;
+    currentPage += 1;
+    loadSignalsPage();
   });
 
   loadData();
 </script>
 </body>
 </html>
+<!--
+CHANGELOG (versi terakhir saja)
+v1.0 - 2026-07-25
+- Tabel sinyal digabung jadi satu (kolom Outcome: RUNNING/TP/SL/TIMEOUT/EXPIRED)
+- Paginasi server-side ke Supabase, 30 sinyal per halaman
+- Kolom Entry (status fill), Harga Exit, dan PnL ditambahkan
+- Hari Berjalan dihitung berkelanjutan sejak signal_date, berhenti di exit_date kalau sudah selesai
+- Filter strategi diterapkan server-side (bukan cuma di browser)
+-->
