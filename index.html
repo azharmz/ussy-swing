@@ -412,13 +412,18 @@
   // di sini selalu "Running" -- riwayat yang sudah resolved (TP/SL/Timeout/
   // Expired) ada di ringkasan performa di bawah, bukan per-baris di sini.
   function outcomeBadge(s){
+    if(s.status === "missed"){
+      const [label, cls] = s.missed_reason === "sl_hit_before_entry"
+        ? ["SL DULUAN", "no_signal"]
+        : ["EXPIRED", "no_signal"];
+      return `<span class="badge badge-${cls}" title="${s.missed_reason === 'sl_hit_before_entry' ? 'Harga jeblok ke level stop loss sebelum sempat entry' : 'Habis waktu 3 hari, harga tidak pernah nyentuh level entry'}">${label}</span>`;
+    }
     const map = {
       pending: ["RUNNING", "watchlist"],
       entered: ["RUNNING", "watchlist"],
       tp_hit: ["TP", "kuat"],
       sl_hit: ["SL", "no_signal"],
       closed_timeout: ["TIMEOUT", "no_signal"],
-      missed: ["EXPIRED", "no_signal"],
     };
     const [label, cls] = map[s.status] || [s.status.toUpperCase(), "no_signal"];
     return `<span class="badge badge-${cls}">${label}</span>`;
@@ -427,11 +432,18 @@
   // Hari berjalan berkelanjutan sejak sinyal muncul (kalender, bukan hari
   // bursa -- pendekatan, bukan presisi mutlak). Tidak reset saat status
   // pindah dari pending ke entered, beda dari days_in_status internal.
-  // Kalau sinyal sudah selesai (ada exit_date), berhenti di situ -- bukan
-  // terus nambah sampai hari ini.
+  // Berhenti hitung begitu sinyal selesai -- exit_date buat tp_hit/sl_hit/
+  // closed_timeout, updated_at buat missed (yang nggak pernah diisi exit_date).
   function daysElapsed(s){
     const signalDate = new Date(s.signal_date + "T00:00:00");
-    const endDate = s.exit_date ? new Date(s.exit_date + "T00:00:00") : new Date();
+    let endDate;
+    if(s.exit_date){
+      endDate = new Date(s.exit_date + "T00:00:00");
+    }else if(s.status === "missed" && s.updated_at){
+      endDate = new Date(s.updated_at);
+    }else{
+      endDate = new Date();
+    }
     endDate.setHours(0,0,0,0);
     const diffMs = endDate - signalDate;
     return Math.max(0, Math.round(diffMs / 86400000));
@@ -606,7 +618,11 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.2 - 2026-07-25
-- Paginasi diubah jadi bernomor + ellipsis, persis style ussy-signal.html
-  (fetch total count dari Supabase pakai header Prefer: count=exact)
+v1.3 - 2026-07-25
+- Fix: badge "EXPIRED" dipecah jadi "EXPIRED" (habis waktu) vs "SL DULUAN"
+  (harga jeblok ke SL sebelum sempat entry) -- sebelumnya digeneralisir jadi
+  satu label yang menyesatkan
+- Fix: Hari Berjalan untuk sinyal missed sekarang berhenti hitung di updated_at
+  (waktu resolve), sebelumnya terus nambah sampai hari ini karena exit_date
+  memang tidak pernah diisi untuk status missed
 -->
