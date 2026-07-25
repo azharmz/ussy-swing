@@ -186,7 +186,7 @@
       <div class="table-wrap" style="margin-bottom:10px;">
         <table>
           <thead>
-            <tr><th>Ticker</th><th>Strategi</th><th>Entry</th><th>Outcome</th><th>Tgl Sinyal</th><th>Level Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Hari Berjalan</th><th>Harga Exit</th><th>PnL</th></tr>
+            <tr><th>Tgl Sinyal</th><th>Ticker</th><th>Strategi</th><th>Level Entry</th><th>Entry</th><th>Stop Loss</th><th>Take Profit</th><th>Outcome</th><th>Hari Berjalan</th><th>Harga Exit</th><th>Mark</th><th>PnL</th></tr>
           </thead>
           <tbody id="signalsBody"></tbody>
         </table>
@@ -320,26 +320,43 @@
     const filtered = signalRows;
     if(filtered.length === 0){
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="11" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
+        `<tr><td colspan="12" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
       return;
     }
     document.getElementById("signalsBody").innerHTML = filtered.map(s => {
       const pnlClass = s.pnl_pct == null ? "" : (s.pnl_pct >= 0 ? "pos" : "neg");
       return `
       <tr>
+        <td class="mono">${escapeHtml(s.signal_date)}</td>
         <td class="symbol">${escapeHtml(s.ticker)}</td>
         <td>${strategyBadge(s.strategy)}</td>
-        <td>${entryStatusBadge(s)}</td>
-        <td>${outcomeBadge(s)}</td>
-        <td class="mono">${escapeHtml(s.signal_date)}</td>
         <td class="mono">${fmt(s.entry_price)}</td>
+        <td>${entryStatusBadge(s)}</td>
         <td class="mono neg">${fmt(s.stop_loss)}</td>
         <td class="mono pos">${fmt(s.take_profit)}</td>
+        <td>${outcomeBadge(s)}</td>
         <td class="mono">${daysElapsed(s)}d</td>
-        <td class="mono">${s.exit_price == null ? "—" : fmt(s.exit_price)}</td>
+        <td class="mono">${exitPriceDisplay(s)}</td>
+        <td class="mono">${markDisplay(s)}</td>
         <td class="mono ${pnlClass}">${s.pnl_pct == null ? "—" : fmt(s.pnl_pct) + "%"}</td>
       </tr>`;
     }).join("");
+  }
+
+  // Harga Exit cuma informatif buat TIMEOUT -- kalau TP_HIT/SL_HIT, angkanya
+  // persis sama dengan kolom Take Profit/Stop Loss, jadi redundan, dikosongkan.
+  function exitPriceDisplay(s){
+    if(s.status === "closed_timeout") return fmt(s.exit_price);
+    return "—";
+  }
+
+  // Mark cuma relevan selama sinyal masih RUNNING (pending/entered) --
+  // setelah resolved, mark_price null di database (Harga Exit yang berlaku).
+  function markDisplay(s){
+    if(s.status === "pending" || s.status === "entered"){
+      return s.mark_price == null ? "—" : fmt(s.mark_price);
+    }
+    return "—";
   }
 
   // Sumbu 1: status entry (fakta -- sudah/belum ke-fill)
@@ -559,10 +576,9 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.0 - 2026-07-25
-- Tabel sinyal digabung jadi satu (kolom Outcome: RUNNING/TP/SL/TIMEOUT/EXPIRED)
-- Paginasi server-side ke Supabase, 30 sinyal per halaman
-- Kolom Entry (status fill), Harga Exit, dan PnL ditambahkan
-- Hari Berjalan dihitung berkelanjutan sejak signal_date, berhenti di exit_date kalau sudah selesai
-- Filter strategi diterapkan server-side (bukan cuma di browser)
+v1.1 - 2026-07-25
+- Kolom Mark (harga terkini) ditambahkan, terisi selama status pending/entered
+- Kolom Harga Exit dirapikan: cuma tampil buat outcome TIMEOUT (redundan kalau TP/SL)
+- Urutan kolom diubah: Tgl Sinyal, Ticker, Strategi, Level Entry, Entry, Stop Loss,
+  Take Profit, Outcome, Hari Berjalan, Harga Exit, Mark, PnL
 -->
