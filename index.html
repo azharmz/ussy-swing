@@ -488,7 +488,7 @@
   const SIGNALS_HEAD_COLS = [
     ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
     ["entry_price", "Level Entry"], ["entry_price_actual", "Entry"],
-    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"], ["status", "Outcome"],
+    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"], ["outcome_label", "Outcome"],
     [null, "Hari Berjalan"], // dihitung di klien, bukan kolom asli -- nggak bisa di-sort server-side
     ["exit_price", "Harga Exit"], ["mark_price", "Mark"], ["pnl_pct", "PnL"],
   ];
@@ -884,12 +884,12 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.6 - 2026-07-26
-- viewToggle (tab Sinyal/Screening Snapshot) dipindah ke atas, posisi mirip
-  file-controls ussy-signal.html -- tampil pertama sebelum note/stats-grid
-- Adopsi sortTable dari ussy-signal.html: klik header kolom tabel Sinyal
-  buat sort (dengan panah arah), TAPI server-side (bukan client-side seperti
-  ussy) karena data kita paginasi dari Supabase -- sort di 30 baris yang lagi
-  kebuka doang nggak akurat. Kolom "Hari Berjalan" tidak sortable karena
-  dihitung di klien, bukan kolom asli
+v1.7 - 2026-07-26
+- Fix: sort kolom "Outcome" tidak konsisten karena sort di kolom status
+  mentah, padahal label yang ditampilkan (RUNNING/EXPIRED/SL DULUAN) itu
+  gabungan status+missed_reason -- dua nilai database beda bisa tampil label
+  sama (RUNNING dari pending ATAU entered), dua status sama bisa tampil beda
+  (EXPIRED vs SL DULUAN, sama-sama status=missed). Ditambah kolom generated
+  outcome_label di database (persis label yang ditampilkan), sort sekarang
+  pakai kolom itu
 -->
