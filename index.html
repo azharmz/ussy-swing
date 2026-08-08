@@ -384,7 +384,7 @@
 
     try{
       const { data, total } = await sbFetchWithCount(
-        `trade_signals?select=*&order=${orderParam}&limit=${PAGE_SIZE}&offset=${offset}${queryParams}`
+        `trade_signals_v?select=*&order=${orderParam}&limit=${PAGE_SIZE}&offset=${offset}${queryParams}`
       );
       signalRows = data;
       totalSignalsCount = total;
@@ -491,8 +491,8 @@
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
     ["lowest_price", "Low"], ["highest_price", "High"],
     ["outcome_label", "Outcome"],
-    [null, "Hari Berjalan"], // dihitung di klien, bukan kolom asli -- nggak bisa di-sort server-side
-    ["exit_price", "Harga Exit"], ["mark_price", "Mark"], ["pnl_pct", "PnL"],
+    ["days_elapsed", "Hari Berjalan"],
+    ["exit_price_display", "Harga Exit"], ["mark_price_display", "Mark"], ["pnl_display", "PnL"],
   ];
 
   function sortTable(key){
@@ -819,7 +819,7 @@
     let data;
     try{
       data = await sbFetch(
-        `trade_signals?select=*&order=signal_date.desc,id.desc&limit=2000${buildTradesFilterParams()}`
+        `trade_signals_v?select=*&order=signal_date.desc,id.desc&limit=2000${buildTradesFilterParams()}`
       );
     }catch(e){
       alert("Gagal ambil data buat CSV: " + e.message);
@@ -904,12 +904,12 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.8 - 2026-08-08
-- Tambah kolom Low & High: harga terendah/tertinggi yang tersentuh sejak
-  signal_date, di-update tiap hari selama status pending/entered
-  (lowest_price/highest_price, kolom baru di trade_signals)
-- Kolom PnL sekarang tampil floating PnL (ditandai "~") buat sinyal yang
-  masih 'entered', dihitung dari mark_price vs entry_price_actual --
-  sebelumnya kosong sampai sinyal resolve
-- Fix: tanggal di changelog sempat nggak ke-update beberapa versi terakhir
+v1.9 - 2026-08-08
+- Fix: sort "Harga Exit", "Mark", "PnL" tidak konsisten -- sort di kolom
+  mentah (exit_price/mark_price/pnl_pct), padahal yang ditampilkan di layar
+  itu nilai terfilter (Harga Exit cuma buat closed_timeout, Mark cuma buat
+  pending/entered) atau nilai terhitung (PnL floating buat entered, dari
+  mark_price bukan kolom pnl_pct). Ditambah 3 kolom generated baru
+  (exit_price_display, mark_price_display, pnl_display) yang persis
+  representasi tampilan, sort sekarang pakai kolom-kolom itu
 -->
