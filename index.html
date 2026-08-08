@@ -488,7 +488,9 @@
   const SIGNALS_HEAD_COLS = [
     ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
     ["entry_price", "Level Entry"], ["entry_price_actual", "Entry"],
-    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"], ["outcome_label", "Outcome"],
+    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
+    ["lowest_price", "Low"], ["highest_price", "High"],
+    ["outcome_label", "Outcome"],
     [null, "Hari Berjalan"], // dihitung di klien, bukan kolom asli -- nggak bisa di-sort server-side
     ["exit_price", "Harga Exit"], ["mark_price", "Mark"], ["pnl_pct", "PnL"],
   ];
@@ -519,11 +521,11 @@
 
     if(filtered.length === 0){
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="12" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
+        `<tr><td colspan="14" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
       return;
     }
     document.getElementById("signalsBody").innerHTML = filtered.map(s => {
-      const pnlClass = s.pnl_pct == null ? "" : (s.pnl_pct >= 0 ? "pos" : "neg");
+      const pnlDisplay = pnlDisplayFor(s);
       return `
       <tr>
         <td class="mono">${escapeHtml(s.signal_date)}</td>
@@ -533,11 +535,13 @@
         <td>${entryStatusBadge(s)}</td>
         <td class="mono neg">${fmt(s.stop_loss)}</td>
         <td class="mono pos">${fmt(s.take_profit)}</td>
+        <td class="mono">${fmt(s.lowest_price)}</td>
+        <td class="mono">${fmt(s.highest_price)}</td>
         <td>${outcomeBadge(s)}</td>
         <td class="mono">${daysElapsed(s)}d</td>
         <td class="mono">${exitPriceDisplay(s)}</td>
         <td class="mono">${markDisplay(s)}</td>
-        <td class="mono ${pnlClass}">${s.pnl_pct == null ? "—" : fmt(s.pnl_pct) + "%"}</td>
+        <td class="mono ${pnlDisplay.cls}">${pnlDisplay.text}</td>
       </tr>`;
     }).join("");
   }
@@ -556,6 +560,21 @@
       return s.mark_price == null ? "—" : fmt(s.mark_price);
     }
     return "—";
+  }
+
+  // PnL: realized (sudah resolve, dari pnl_pct tersimpan) vs floating
+  // (masih 'entered', dihitung dari mark_price -- BELUM final, bisa berubah
+  // tiap hari). Floating ditandai "~" di depan biar nggak ketuker sama
+  // realized -- dua-duanya angka %, tapi maknanya beda (final vs sementara).
+  function pnlDisplayFor(s){
+    if(s.pnl_pct != null){
+      return { text: fmt(s.pnl_pct) + "%", cls: s.pnl_pct >= 0 ? "pos" : "neg" };
+    }
+    if(s.status === "entered" && s.mark_price != null && s.entry_price_actual != null){
+      const floatingPnl = (s.mark_price - s.entry_price_actual) / s.entry_price_actual * 100;
+      return { text: "~" + fmt(floatingPnl) + "%", cls: floatingPnl >= 0 ? "pos" : "neg" };
+    }
+    return { text: "—", cls: "" };
   }
 
   // Sumbu 1: status entry (fakta -- sudah/belum ke-fill)
@@ -809,7 +828,8 @@
     if(!data.length){ alert("Tidak ada data buat di-export."); return; }
 
     const cols = ["signal_date","ticker","strategy","entry_price","entry_price_actual","entry_date",
-                  "stop_loss","take_profit","status","missed_reason","exit_price","exit_date","pnl_pct"];
+                  "stop_loss","take_profit","lowest_price","highest_price","status","missed_reason",
+                  "mark_price","exit_price","exit_date","pnl_pct"];
     const csvLines = [cols.join(",")];
     for(const row of data){
       csvLines.push(cols.map(c => {
@@ -884,12 +904,12 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.7 - 2026-07-26
-- Fix: sort kolom "Outcome" tidak konsisten karena sort di kolom status
-  mentah, padahal label yang ditampilkan (RUNNING/EXPIRED/SL DULUAN) itu
-  gabungan status+missed_reason -- dua nilai database beda bisa tampil label
-  sama (RUNNING dari pending ATAU entered), dua status sama bisa tampil beda
-  (EXPIRED vs SL DULUAN, sama-sama status=missed). Ditambah kolom generated
-  outcome_label di database (persis label yang ditampilkan), sort sekarang
-  pakai kolom itu
+v1.8 - 2026-08-08
+- Tambah kolom Low & High: harga terendah/tertinggi yang tersentuh sejak
+  signal_date, di-update tiap hari selama status pending/entered
+  (lowest_price/highest_price, kolom baru di trade_signals)
+- Kolom PnL sekarang tampil floating PnL (ditandai "~") buat sinyal yang
+  masih 'entered', dihitung dari mark_price vs entry_price_actual --
+  sebelumnya kosong sampai sinyal resolve
+- Fix: tanggal di changelog sempat nggak ke-update beberapa versi terakhir
 -->
