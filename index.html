@@ -487,12 +487,12 @@
   // dari Supabase (sort cuma di 30 baris yang lagi kebuka nggak akurat).
   const SIGNALS_HEAD_COLS = [
     ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
-    ["entry_price", "Level Entry"], ["entry_price_actual", "Entry"],
+    ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
     ["lowest_price", "Low"], ["highest_price", "High"],
     ["outcome_label", "Outcome"],
     ["days_elapsed", "Hari Berjalan"],
-    ["exit_price_display", "Harga Exit"], ["mark_price_display", "Mark"], ["pnl_display", "PnL"],
+    ["mark_exit_price", "Mark / Exit"], ["pnl_display", "PnL"],
   ];
 
   function sortTable(key){
@@ -521,7 +521,7 @@
 
     if(filtered.length === 0){
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="14" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
+        `<tr><td colspan="13" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
       return;
     }
     document.getElementById("signalsBody").innerHTML = filtered.map(s => {
@@ -539,27 +539,23 @@
         <td class="mono">${fmt(s.highest_price)}</td>
         <td>${outcomeBadge(s)}</td>
         <td class="mono">${daysElapsed(s)}d</td>
-        <td class="mono">${exitPriceDisplay(s)}</td>
-        <td class="mono">${markDisplay(s)}</td>
+        <td class="mono">${markExitDisplay(s)}</td>
         <td class="mono ${pnlDisplay.cls}">${pnlDisplay.text}</td>
       </tr>`;
     }).join("");
   }
 
-  // Harga Exit cuma informatif buat TIMEOUT -- kalau TP_HIT/SL_HIT, angkanya
-  // persis sama dengan kolom Take Profit/Stop Loss, jadi redundan, dikosongkan.
-  function exitPriceDisplay(s){
-    if(s.status === "closed_timeout") return fmt(s.exit_price);
-    return "—";
-  }
-
-  // Mark cuma relevan selama sinyal masih RUNNING (pending/entered) --
-  // setelah resolved, mark_price null di database (Harga Exit yang berlaku).
-  function markDisplay(s){
+  // Gabungan Mark (selama running) + Exit (setelah resolved) jadi 1 kolom.
+  // Buat TP_HIT/SL_HIT, dikasih label "TP @ harga"/"SL @ harga" langsung --
+  // biar nggak perlu geser mata ke kolom Take Profit/Stop Loss buat mastiin.
+  function markExitDisplay(s){
     if(s.status === "pending" || s.status === "entered"){
       return s.mark_price == null ? "—" : fmt(s.mark_price);
     }
-    return "—";
+    if(s.status === "tp_hit") return `TP @ ${fmt(s.exit_price)}`;
+    if(s.status === "sl_hit") return `SL @ ${fmt(s.exit_price)}`;
+    if(s.status === "closed_timeout") return fmt(s.exit_price);
+    return "—"; // missed -- nggak pernah ada posisi, nggak ada harga relevan
   }
 
   // PnL: realized (sudah resolve, dari pnl_pct tersimpan) vs floating
@@ -904,12 +900,14 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja)
-v1.9 - 2026-08-08
-- Fix: sort "Harga Exit", "Mark", "PnL" tidak konsisten -- sort di kolom
-  mentah (exit_price/mark_price/pnl_pct), padahal yang ditampilkan di layar
-  itu nilai terfilter (Harga Exit cuma buat closed_timeout, Mark cuma buat
-  pending/entered) atau nilai terhitung (PnL floating buat entered, dari
-  mark_price bukan kolom pnl_pct). Ditambah 3 kolom generated baru
-  (exit_price_display, mark_price_display, pnl_display) yang persis
-  representasi tampilan, sort sekarang pakai kolom-kolom itu
+v2.1 - 2026-08-09
+- Rename kolom "Level Entry" -> "Trigger" (lebih akurat: level yang jadi
+  syarat pemicu entry, bukan sekadar perkiraan)
+- Kolom "Harga Exit" + "Mark" digabung jadi 1 kolom "Mark / Exit" -- selama
+  running tampil mark_price, setelah resolve tampil harga exit. Khusus
+  TP_HIT/SL_HIT dikasih label langsung ("TP @ 123.45"/"SL @ 98.20") biar
+  nggak perlu geser mata ke kolom Take Profit/Stop Loss buat mastiin
+- Kolom generated baru mark_exit_price + view trade_signals_v di-recreate
+  (kolom baru di tabel tidak otomatis kebawa ke view lama, "select *" di
+  view dibekukan pas dibuat)
 -->
