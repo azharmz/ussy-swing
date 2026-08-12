@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>US Swing Screener</title>
+<title>USSY Swing Screener</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -168,8 +168,8 @@
 
   <header>
     <div>
-      <div class="brand-eyebrow">uswing.anyapp.my.id &middot; US Swing Screener</div>
-      <h1><span class="accent">US</span> Swing</h1>
+      <div class="brand-eyebrow">uswing.anyapp.my.id &middot; USSY Swing Screener</div>
+      <h1><span class="accent">USSY</span> Swing</h1>
       <div class="sub">Screening breakout harian dari universe halal x XTB, scoring otomatis via Colab + GitHub Actions</div>
       <div class="sub" id="lastRefreshIndicator" style="font-size:11px;opacity:.7;margin-top:2px;"></div>
     </div>
@@ -384,7 +384,7 @@
 
     try{
       const { data, total } = await sbFetchWithCount(
-        `trade_signals_v?select=*&order=${orderParam}&limit=${PAGE_SIZE}&offset=${offset}${queryParams}`
+        `trade_signals_full_v?select=*&order=${orderParam}&limit=${PAGE_SIZE}&offset=${offset}${queryParams}`
       );
       signalRows = data;
       totalSignalsCount = total;
@@ -524,10 +524,10 @@
         `<tr><td colspan="13" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
       return;
     }
-    document.getElementById("signalsBody").innerHTML = filtered.map(s => {
+    document.getElementById("signalsBody").innerHTML = filtered.map((s, idx) => {
       const pnlDisplay = pnlDisplayFor(s);
       return `
-      <tr>
+      <tr onclick="openSignalModal(${idx})" style="cursor:pointer">
         <td class="mono">${escapeHtml(s.signal_date)}</td>
         <td class="symbol">${escapeHtml(s.ticker)}</td>
         <td>${strategyBadge(s.strategy)}</td>
@@ -792,6 +792,48 @@
   function closeModal(){ document.getElementById("modalOverlay").classList.remove("show"); }
   document.addEventListener("keydown", e => { if(e.key === "Escape") closeModal(); });
 
+  // Modal detail buat baris di tabel Sinyal -- nunjukkin hasil trade
+  // (trigger/entry/SL/TP/outcome/PnL) SEKALIGUS kondisi market pas sinyal
+  // itu muncul (snapshot_* dari daily_features+strategy_results, join lewat
+  // trade_signals_full_v). Ini yang dipakai buat tuning: liat "sinyal
+  // aslinya bagaimana", bukan cuma hasil akhirnya.
+  function openSignalModal(idx){
+    const s = signalRows[idx];
+    const pnlDisplay = pnlDisplayFor(s);
+    let html = `<div class="modal-head"><h3 class="symbol">${escapeHtml(s.ticker)} ${strategyBadge(s.strategy)}</h3><span class="x" onclick="closeModal()">&times;</span></div>`;
+    html += `<div class="modal-sub">${escapeHtml(s.signal_date)} &middot; ${outcomeBadge(s)}</div>`;
+
+    html += `<div class="section-h">Trade</div><div class="field-grid">`;
+    html += fieldHtml("Trigger", fmt(s.entry_price));
+    html += fieldHtml("Entry", s.entry_price_actual != null ? fmt(s.entry_price_actual) : "Belum entry");
+    html += fieldHtml("Stop Loss", fmt(s.stop_loss));
+    html += fieldHtml("Take Profit", fmt(s.take_profit));
+    html += fieldHtml("Low / High selama jalan", `${fmt(s.lowest_price)} / ${fmt(s.highest_price)}`);
+    html += fieldHtml("Mark / Exit", markExitDisplay(s));
+    html += fieldHtml("PnL", pnlDisplay.text);
+    html += fieldHtml("Hari Berjalan", daysElapsed(s) + "d");
+    if(s.missed_reason) html += fieldHtml("Alasan Gagal", s.missed_reason === "sl_hit_before_entry" ? "SL sebelum sempat entry" : "Habis waktu (expired)");
+    html += `</div>`;
+
+    html += `<div class="section-h">Kondisi Market Saat Sinyal Muncul</div><div class="field-grid">`;
+    html += fieldHtml("Score / Tier", s.snapshot_score != null ? `${s.snapshot_score} (${s.snapshot_tier || "—"})` : null);
+    html += fieldHtml("Close", fmt(s.snapshot_close));
+    html += fieldHtml("RSI14", fmt(s.snapshot_rsi14));
+    html += fieldHtml("ATR14 %", s.snapshot_atr14_pct != null ? fmt(s.snapshot_atr14_pct) + "%" : null);
+    html += fieldHtml("Jarak MA20", s.snapshot_dist_ma20_pct != null ? fmt(s.snapshot_dist_ma20_pct) + "%" : null);
+    html += fieldHtml("Rel. Volume", s.snapshot_relative_volume != null ? fmt(s.snapshot_relative_volume) + "x" : null);
+    html += fieldHtml("RS vs SPY", s.snapshot_rs_vs_spy != null ? fmt(s.snapshot_rs_vs_spy) + "%" : null);
+    html += `</div>`;
+
+    const snapSignals = Array.isArray(s.snapshot_signals) ? s.snapshot_signals : [];
+    if(snapSignals.length){
+      html += `<div class="section-h">Sinyal Terpenuhi</div><div>${snapSignals.map(sig => `<span class="sig-chip">${escapeHtml(sig)}</span>`).join("")}</div>`;
+    }
+
+    document.getElementById("modalContent").innerHTML = html;
+    document.getElementById("modalOverlay").classList.add("show");
+  }
+
   function fmt(n){ return (n === null || n === undefined) ? "—" : Number(n).toFixed(2); }
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -815,7 +857,7 @@
     let data;
     try{
       data = await sbFetch(
-        `trade_signals_v?select=*&order=signal_date.desc,id.desc&limit=2000${buildTradesFilterParams()}`
+        `trade_signals_full_v?select=*&order=signal_date.desc,id.desc&limit=2000${buildTradesFilterParams()}`
       );
     }catch(e){
       alert("Gagal ambil data buat CSV: " + e.message);
@@ -825,12 +867,15 @@
 
     const cols = ["signal_date","ticker","strategy","entry_price","entry_price_actual","entry_date",
                   "stop_loss","take_profit","lowest_price","highest_price","status","missed_reason",
-                  "mark_price","exit_price","exit_date","pnl_pct"];
+                  "mark_price","exit_price","exit_date","pnl_pct",
+                  "snapshot_score","snapshot_tier","snapshot_close","snapshot_rsi14","snapshot_atr14_pct",
+                  "snapshot_dist_ma20_pct","snapshot_relative_volume","snapshot_rs_vs_spy","snapshot_signals"];
     const csvLines = [cols.join(",")];
     for(const row of data){
       csvLines.push(cols.map(c => {
-        const v = row[c];
+        let v = row[c];
         if(v == null) return "";
+        if(Array.isArray(v)) v = v.join(" | "); // snapshot_signals -- array jadi "Trend Bullish | Pullback ke MA20"
         const s = String(v);
         return s.includes(",") ? `"${s}"` : s;
       }).join(","));
@@ -899,15 +944,15 @@
 </body>
 </html>
 <!--
-CHANGELOG (versi terakhir saja)
-v2.1 - 2026-08-09
-- Rename kolom "Level Entry" -> "Trigger" (lebih akurat: level yang jadi
-  syarat pemicu entry, bukan sekadar perkiraan)
-- Kolom "Harga Exit" + "Mark" digabung jadi 1 kolom "Mark / Exit" -- selama
-  running tampil mark_price, setelah resolve tampil harga exit. Khusus
-  TP_HIT/SL_HIT dikasih label langsung ("TP @ 123.45"/"SL @ 98.20") biar
-  nggak perlu geser mata ke kolom Take Profit/Stop Loss buat mastiin
-- Kolom generated baru mark_exit_price + view trade_signals_v di-recreate
-  (kolom baru di tabel tidak otomatis kebawa ke view lama, "select *" di
-  view dibekukan pas dibuat)
+CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
+v2.2
+- Rebrand: US Swing -> USSY Swing (title, header)
+- View baru trade_signals_full_v: join trade_signals_v + daily_features +
+  strategy_results (snapshot kondisi market PAS signal_date -- score/tier/
+  RSI/volume/dst). Dipakai listing utama, CSV export, dan modal
+- CSV export sekarang include kolom snapshot_* (score, tier, close, RSI14,
+  ATR14%, jarak MA20, rel. volume, RS vs SPY, sinyal terpenuhi)
+- Modal detail ditambahkan ke tabel Sinyal (sebelumnya cuma ada di tabel
+  Screening Snapshot) -- klik baris buat lihat trade + kondisi market saat
+  sinyal muncul, berguna buat tuning
 -->
