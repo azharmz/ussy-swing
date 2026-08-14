@@ -48,6 +48,7 @@
     background:var(--line); border:1px solid var(--line); border-radius:6px; overflow:hidden;
     margin-bottom:20px;
   }
+  #paperStatsGrid{ grid-template-columns:repeat(5,1fr); }
   .stat-card{ background:var(--panel); padding:16px 14px; position:relative; }
   .stat-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:8px; }
   .stat-value{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; }
@@ -151,14 +152,14 @@
   footer{ text-align:center; color:var(--text-dim); font-size:11.5px; margin-top:30px; }
 
   @media (max-width:900px){
-    .stats-grid{ grid-template-columns:repeat(3,1fr); }
+    .stats-grid, #paperStatsGrid{ grid-template-columns:repeat(3,1fr); }
     .field-grid{ grid-template-columns:repeat(2,1fr); }
   }
   @media (max-width:600px){
     .wrap{ padding:18px 14px 40px; }
     header{ padding-bottom:14px; margin-bottom:18px; gap:12px; }
     h1{ font-size:21px; }
-    .stats-grid{ grid-template-columns:repeat(2,1fr); }
+    .stats-grid, #paperStatsGrid{ grid-template-columns:repeat(2,1fr); }
     .field-grid{ grid-template-columns:1fr; gap:8px; }
   }
 </style>
@@ -204,9 +205,17 @@
 
     <div class="stats-grid" id="statsGrid"></div>
 
+    <div class="stats-grid" id="paperStatsGrid"></div>
+    <div class="note" id="paperNote"></div>
+
     <div class="panel">
-      <div class="panel-title">Equity Curve <span class="tag">closed trades</span></div>
-      <div id="equityChart"></div>
+      <div class="panel-title">Total Equity <span class="tag">paper trading</span></div>
+      <div id="paperEquityChart"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Cumulative Portfolio Return <span class="tag">vs SPY</span></div>
+      <div id="returnCompareChart"></div>
     </div>
 
     <div id="tab-trades">
@@ -303,6 +312,22 @@
   const PAGE_SIZE = 30;
   let currentPage = 1;
   let totalSignalsCount = 0;
+
+  // ============================================
+  // Paper Trading — simulasi portofolio dari trade_signals aktual.
+  // Ini SIMULASI ilustratif, bukan transaksi riil di broker. Asumsi (bisa diubah di sini):
+  //   - modal awal $20,000
+  //   - tiap sinyal dieksekusi diberi porsi 2% dari equity saat entry (bukan 10% --
+  //     volume sinyal live ternyata jauh lebih tinggi dari retail biasa: overlap
+  //     posisi bersamaan pernah tembus 50 dalam 3 minggu observasi pertama, jadi
+  //     porsi per-trade dikecilkan biar hampir semua sinyal tetap "diambil" di
+  //     simulasi, bukan mayoritas ke-skip karena slot penuh)
+  //   - maks 60 posisi terbuka bersamaan (buffer di atas rekor 50) — kas juga jadi
+  //     pengaman alami: kalau cash < ukuran posisi berikutnya, sinyal itu di-skip
+  // ============================================
+  const PAPER_START_CAPITAL = 20000;   // modal awal simulasi, USD
+  const PAPER_SIZE_PCT = 0.02;         // ukuran posisi = 2% equity saat entry
+  const PAPER_MAX_CONCURRENT = 60;     // maks posisi terbuka bersamaan (buffer di atas rekor 50)
 
   // ============================================
   // Cache localStorage — stale-while-revalidate.
@@ -463,11 +488,23 @@
       }catch(e){ console.warn("signal_performance belum tersedia:", e.message); }
 
       try{
-        const closedTrades = await sbFetch(
-          "trade_signals?select=exit_date,pnl_pct&status=in.(tp_hit,sl_hit,closed_timeout)&order=exit_date.asc&limit=500"
+        const allTrades = await sbFetch(
+          "trade_signals?select=ticker,strategy,status,entry_date,exit_date,entry_price_actual,exit_price,mark_price,pnl_pct" +
+          "&status=in.(entered,tp_hit,sl_hit,closed_timeout)&order=entry_date.asc&limit=2000"
         );
-        renderEquityChart(closedTrades);
-      }catch(e){ console.warn("equity chart belum bisa dimuat:", e.message); }
+        const sim = simulatePaperPortfolio(allTrades);
+        renderPaperStats(sim);
+        renderPaperEquityChart(sim);
+
+        if(sim){
+          try{
+            const spyRows = await sbFetch(
+              `daily_features?select=date,close&ticker=eq.SPY&date=gte.${sim.firstDate}&order=date.asc&limit=2000`
+            );
+            renderReturnCompareChart(sim, spyRows);
+          }catch(e){ console.warn("data SPY buat benchmark belum bisa dimuat:", e.message); }
+        }
+      }catch(e){ console.warn("paper trading belum bisa dimuat:", e.message); }
 
     }catch(err){
       document.getElementById("loadingState").style.display = "none";
@@ -635,41 +672,180 @@
     return `<span class="mono" style="font-size:10.5px;color:${color};">${label}</span>${warn}`;
   }
 
-  // Equity curve — adaptasi persis dari ussy-signal.html: SVG line chart
-  // kumulatif dari pnl_pct trade yang sudah resolved (tp_hit/sl_hit/closed_timeout).
-  function renderEquityChart(closedTrades){
-    const trades = closedTrades
-      .filter(t => t.pnl_pct != null && t.exit_date)
-      .sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
+  // ============================================
+  // Paper Trading — simulasi portofolio $ dari trade_signals aktual.
+  // Event-based: proses tiap open/close secara kronologis, cap posisi
+  // konkuren, sizing 10% equity per trade. Lihat konstanta PAPER_* di atas.
+  // ============================================
+  function fmtMoney(v){
+    return "$" + Math.round(v).toLocaleString("en-US");
+  }
 
-    const el = document.getElementById("equityChart");
-    if(!trades.length){
-      el.innerHTML = '<div style="color:var(--text-dim);font-size:12.5px;padding:20px 0;">Belum ada data untuk ditampilkan.</div>';
-      return;
+  function simulatePaperPortfolio(trades){
+    const taken = trades.filter(t => t.entry_date)
+      .sort((a, b) => new Date(a.entry_date) - new Date(b.entry_date));
+    if(!taken.length) return null;
+
+    const RESOLVED = new Set(["tp_hit", "sl_hit", "closed_timeout"]);
+    const events = [];
+    taken.forEach(t => {
+      events.push({ date: t.entry_date, type: "open", t });
+      if(RESOLVED.has(t.status) && t.exit_date){
+        events.push({ date: t.exit_date, type: "close", t });
+      }
+    });
+    // Urut kronologis; di tanggal sama, proses "close" duluan biar kas
+    // yang baru dilepas bisa dipakai lagi buat "open" di tanggal itu.
+    events.sort((a, b) => {
+      const d = new Date(a.date) - new Date(b.date);
+      if(d !== 0) return d;
+      return a.type === "close" ? -1 : 1;
+    });
+
+    let cash = PAPER_START_CAPITAL;
+    const openPos = []; // {t, size}
+    const curve = [];
+    let notTakenCount = 0;
+
+    events.forEach(e => {
+      if(e.type === "open"){
+        if(openPos.length >= PAPER_MAX_CONCURRENT){ notTakenCount++; return; }
+        const equityNow = cash + openPos.reduce((s, p) => s + p.size, 0);
+        const size = equityNow * PAPER_SIZE_PCT;
+        if(size > cash){ notTakenCount++; return; }
+        cash -= size;
+        openPos.push({ t: e.t, size });
+      }else{
+        const idx = openPos.findIndex(p => p.t === e.t);
+        if(idx === -1) return;
+        const [pos] = openPos.splice(idx, 1);
+        const pnlFrac = (e.t.pnl_pct || 0) / 100;
+        cash += pos.size * (1 + pnlFrac);
+      }
+      curve.push({ date: e.date, equity: cash + openPos.reduce((s, p) => s + p.size, 0) });
+    });
+
+    // Posisi masih terbuka (status=entered, belum resolved) -> mark-to-market
+    let investedValue = 0;
+    openPos.forEach(p => {
+      const entry = p.t.entry_price_actual, mark = p.t.mark_price;
+      const pct = (entry && mark) ? (mark - entry) / entry : 0;
+      investedValue += p.size * (1 + pct);
+    });
+
+    const totalEquity = cash + investedValue;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if(!curve.length || curve[curve.length - 1].date !== todayStr){
+      curve.push({ date: todayStr, equity: totalEquity });
     }
 
-    let cum = 0;
-    const pts = trades.map(t => { cum += t.pnl_pct; return cum; });
+    return {
+      cash, invested: investedValue, openCount: openPos.length,
+      totalEquity, netPnl: totalEquity - PAPER_START_CAPITAL,
+      netPnlPct: (totalEquity / PAPER_START_CAPITAL - 1) * 100,
+      curve, notTakenCount, firstDate: taken[0].entry_date
+    };
+  }
+
+  function renderPaperStats(sim){
+    const grid = document.getElementById("paperStatsGrid");
+    const note = document.getElementById("paperNote");
+    if(!sim){
+      grid.innerHTML = "";
+      note.textContent = "";
+      return;
+    }
+    const pnlClass = sim.netPnl >= 0 ? "pos" : "neg";
+    grid.innerHTML = [
+      ["Trading Balance", fmtMoney(sim.cash), "kas belum terpakai", ""],
+      ["Invested", fmtMoney(sim.invested), `${sim.openCount} posisi terbuka`, ""],
+      ["Open", sim.openCount, "posisi aktif", ""],
+      ["Net Profit / Loss", `${sim.netPnl >= 0 ? "+" : ""}${fmtMoney(sim.netPnl)}`,
+        `${sim.netPnlPct >= 0 ? "+" : ""}${sim.netPnlPct.toFixed(2)}%`, pnlClass],
+      ["Total Equity", fmtMoney(sim.totalEquity), "", ""],
+    ].map(([label, val, sub, cls]) => `
+      <div class="stat-card">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value ${cls}">${val}</div>
+        <div class="stat-sub ${cls}">${sub}</div>
+      </div>`).join("");
+
+    note.innerHTML = `Simulasi paper trading, <b>bukan transaksi riil</b> — modal awal ` +
+      `${fmtMoney(PAPER_START_CAPITAL)}, tiap sinyal yang benar-benar dieksekusi (status entered/` +
+      `tp_hit/sl_hit/closed_timeout) diberi porsi ${(PAPER_SIZE_PCT * 100).toFixed(0)}% dari equity ` +
+      `saat entry, maks ${PAPER_MAX_CONCURRENT} posisi terbuka bersamaan.` +
+      (sim.notTakenCount ? ` ${sim.notTakenCount} sinyal dianggap tidak diambil di simulasi ini ` +
+        `karena slot/kas penuh saat itu.` : "");
+  }
+
+  function renderPaperEquityChart(sim){
+    const el = document.getElementById("paperEquityChart");
+    if(!sim || sim.curve.length < 2){
+      el.innerHTML = '<div style="color:var(--text-dim);font-size:12.5px;padding:20px 0;">Belum cukup data untuk ditampilkan.</div>';
+      return;
+    }
+    const curve = sim.curve;
     const W = 1100, H = 220, pad = 30;
-    const min = Math.min(0, ...pts), max = Math.max(0, ...pts);
+    const vals = curve.map(p => p.equity);
+    const min = Math.min(...vals), max = Math.max(...vals);
     const range = (max - min) || 1;
-    const stepX = (W - 2 * pad) / Math.max(1, pts.length - 1);
-    const xy = pts.map((v, i) => [pad + i * stepX, H - pad - ((v - min) / range) * (H - 2 * pad)]);
+    const stepX = (W - 2 * pad) / Math.max(1, curve.length - 1);
+    const xy = curve.map((p, i) => [pad + i * stepX, H - pad - ((p.equity - min) / range) * (H - 2 * pad)]);
     const path = xy.map((p, i) => (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-    const zeroY = H - pad - ((0 - min) / range) * (H - 2 * pad);
-    const last = pts[pts.length - 1];
-    const color = last >= 0 ? "var(--green)" : "var(--red)";
+    const last = vals[vals.length - 1];
+    const color = last >= PAPER_START_CAPITAL ? "var(--green)" : "var(--red)";
 
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="220" preserveAspectRatio="none">
-      <line x1="${pad}" y1="${zeroY}" x2="${W - pad}" y2="${zeroY}" stroke="var(--line)" stroke-dasharray="4 3"/>
       <path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>
       <circle cx="${xy[xy.length - 1][0]}" cy="${xy[xy.length - 1][1]}" r="3.5" fill="${color}"/>
     </svg>
     <div style="display:flex;justify-content:space-between;color:var(--text-dim);font-size:11px;margin-top:4px;">
-      <span>${escapeHtml(trades[0].exit_date)}</span>
-      <span class="mono" style="color:${color}">Kumulatif: ${last >= 0 ? "+" : ""}${last.toFixed(1)}%</span>
-      <span>${escapeHtml(trades[trades.length - 1].exit_date)}</span>
+      <span>${escapeHtml(curve[0].date)}</span>
+      <span class="mono" style="color:${color}">${fmtMoney(last)}</span>
+      <span>${escapeHtml(curve[curve.length - 1].date)}</span>
     </div>`;
+  }
+
+  function renderReturnCompareChart(sim, spyRows){
+    const el = document.getElementById("returnCompareChart");
+    if(!sim || sim.curve.length < 2 || !spyRows || spyRows.length < 2){
+      el.innerHTML = '<div style="color:var(--text-dim);font-size:12.5px;padding:20px 0;">Belum cukup data untuk perbandingan.</div>';
+      return;
+    }
+    const portPts = sim.curve.map(p => ({ date: p.date, pct: (p.equity / PAPER_START_CAPITAL - 1) * 100 }));
+    const spyBase = spyRows[0].close;
+    const spyPts = spyRows.map(r => ({ date: r.date, pct: (r.close / spyBase - 1) * 100 }));
+
+    const W = 1100, H = 220, pad = 30;
+    const allPct = [...portPts.map(p => p.pct), ...spyPts.map(p => p.pct)];
+    const min = Math.min(0, ...allPct), max = Math.max(0, ...allPct);
+    const range = (max - min) || 1;
+    const t0 = new Date(portPts[0].date).getTime();
+    const t1 = new Date(portPts[portPts.length - 1].date).getTime();
+    const totalT = (t1 - t0) || 1;
+    const xOf = d => pad + ((new Date(d).getTime() - t0) / totalT) * (W - 2 * pad);
+    const yOf = v => H - pad - ((v - min) / range) * (H - 2 * pad);
+    const pathOf = pts => pts.map((p, i) => (i === 0 ? "M" : "L") + xOf(p.date).toFixed(1) + "," + yOf(p.pct).toFixed(1)).join(" ");
+    const zeroY = yOf(0);
+    const portLast = portPts[portPts.length - 1].pct;
+    const spyLast = spyPts[spyPts.length - 1].pct;
+
+    el.innerHTML = `
+      <div style="display:flex;gap:18px;margin-bottom:8px;font-size:12px;">
+        <span><span style="display:inline-block;width:9px;height:9px;background:var(--green);border-radius:2px;margin-right:5px;"></span>Portfolio
+          <b class="mono ${portLast >= 0 ? "pos" : "neg"}">${portLast >= 0 ? "+" : ""}${portLast.toFixed(2)}%</b></span>
+        <span><span style="display:inline-block;width:9px;height:9px;background:var(--purple);border-radius:2px;margin-right:5px;"></span>SPY
+          <b class="mono ${spyLast >= 0 ? "pos" : "neg"}">${spyLast >= 0 ? "+" : ""}${spyLast.toFixed(2)}%</b></span>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="220" preserveAspectRatio="none">
+        <line x1="${pad}" y1="${zeroY}" x2="${W - pad}" y2="${zeroY}" stroke="var(--line)" stroke-dasharray="4 3"/>
+        <path d="${pathOf(spyPts)}" fill="none" stroke="var(--purple)" stroke-width="1.6" opacity="0.85"/>
+        <path d="${pathOf(portPts)}" fill="none" stroke="var(--green)" stroke-width="2"/>
+      </svg>
+      <div style="display:flex;justify-content:space-between;color:var(--text-dim);font-size:11px;margin-top:4px;">
+        <span>${escapeHtml(portPts[0].date)}</span>
+        <span>${escapeHtml(portPts[portPts.length - 1].date)}</span>
+      </div>`;
   }
 
   function renderPerformance(p){
@@ -945,14 +1121,15 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.2
-- Rebrand: US Swing -> USSY Swing (title, header)
-- View baru trade_signals_full_v: join trade_signals_v + daily_features +
-  strategy_results (snapshot kondisi market PAS signal_date -- score/tier/
-  RSI/volume/dst). Dipakai listing utama, CSV export, dan modal
-- CSV export sekarang include kolom snapshot_* (score, tier, close, RSI14,
-  ATR14%, jarak MA20, rel. volume, RS vs SPY, sinyal terpenuhi)
-- Modal detail ditambahkan ke tabel Sinyal (sebelumnya cuma ada di tabel
-  Screening Snapshot) -- klik baris buat lihat trade + kondisi market saat
-  sinyal muncul, berguna buat tuning
+v2.3
+- Panel "Equity Curve" (cumulative % pnl trade resolved) diganti dengan modul
+  Paper Trading: statsGrid baru (Trading Balance, Invested, Open, Net P/L,
+  Total Equity) + panel Total Equity ($ curve) + panel Cumulative Portfolio
+  Return vs SPY. Simulasi ilustratif dari trade_signals aktual (status
+  entered/tp_hit/sl_hit/closed_timeout saja) -- BUKAN transaksi riil.
+  Asumsi (const PAPER_* di script): modal awal $20,000, sizing 2% equity per
+  trade, maks 60 posisi terbuka bersamaan -- direvisi dari asumsi awal
+  10%/8 posisi setelah dicek ke DB: overlap posisi live pernah tembus 50
+  dalam 3 minggu observasi pertama. Benchmark SPY dari daily_features
+  (ticker=SPY) sejak entry_date sinyal pertama.
 -->
