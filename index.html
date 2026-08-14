@@ -48,7 +48,6 @@
     background:var(--line); border:1px solid var(--line); border-radius:6px; overflow:hidden;
     margin-bottom:20px;
   }
-  #paperStatsGrid{ grid-template-columns:repeat(5,1fr); }
   .stat-card{ background:var(--panel); padding:16px 14px; position:relative; }
   .stat-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:8px; }
   .stat-value{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; }
@@ -706,6 +705,7 @@
     const openPos = []; // {t, size}
     const curve = [];
     let notTakenCount = 0;
+    let realizedPnl = 0; // hanya dari posisi yang sudah resolved (tp_hit/sl_hit/closed_timeout)
 
     events.forEach(e => {
       if(e.type === "open"){
@@ -720,17 +720,21 @@
         if(idx === -1) return;
         const [pos] = openPos.splice(idx, 1);
         const pnlFrac = (e.t.pnl_pct || 0) / 100;
-        cash += pos.size * (1 + pnlFrac);
+        const pnlDollar = pos.size * pnlFrac;
+        cash += pos.size + pnlDollar;
+        realizedPnl += pnlDollar;
       }
       curve.push({ date: e.date, equity: cash + openPos.reduce((s, p) => s + p.size, 0) });
     });
 
     // Posisi masih terbuka (status=entered, belum resolved) -> mark-to-market
-    let investedValue = 0;
+    let investedValue = 0, floatingPnl = 0;
     openPos.forEach(p => {
       const entry = p.t.entry_price_actual, mark = p.t.mark_price;
       const pct = (entry && mark) ? (mark - entry) / entry : 0;
-      investedValue += p.size * (1 + pct);
+      const val = p.size * (1 + pct);
+      investedValue += val;
+      floatingPnl += val - p.size;
     });
 
     const totalEquity = cash + investedValue;
@@ -741,7 +745,8 @@
 
     return {
       cash, invested: investedValue, openCount: openPos.length,
-      totalEquity, netPnl: totalEquity - PAPER_START_CAPITAL,
+      totalEquity, realizedPnl, floatingPnl,
+      netPnl: totalEquity - PAPER_START_CAPITAL,
       netPnlPct: (totalEquity / PAPER_START_CAPITAL - 1) * 100,
       curve, notTakenCount, firstDate: taken[0].entry_date
     };
@@ -755,14 +760,19 @@
       note.textContent = "";
       return;
     }
-    const pnlClass = sim.netPnl >= 0 ? "pos" : "neg";
+    const realClass = sim.realizedPnl >= 0 ? "pos" : "neg";
+    const floatClass = sim.floatingPnl >= 0 ? "pos" : "neg";
+    const totalClass = sim.netPnl >= 0 ? "pos" : "neg";
     grid.innerHTML = [
       ["Trading Balance", fmtMoney(sim.cash), "kas belum terpakai", ""],
       ["Invested", fmtMoney(sim.invested), `${sim.openCount} posisi terbuka`, ""],
       ["Open", sim.openCount, "posisi aktif", ""],
-      ["Net Profit / Loss", `${sim.netPnl >= 0 ? "+" : ""}${fmtMoney(sim.netPnl)}`,
-        `${sim.netPnlPct >= 0 ? "+" : ""}${sim.netPnlPct.toFixed(2)}%`, pnlClass],
-      ["Total Equity", fmtMoney(sim.totalEquity), "", ""],
+      ["Realized PnL", `${sim.realizedPnl >= 0 ? "+" : ""}${fmtMoney(sim.realizedPnl)}`,
+        "dari trade selesai", realClass],
+      ["Floating PnL", `${sim.floatingPnl >= 0 ? "+" : ""}${fmtMoney(sim.floatingPnl)}`,
+        "posisi masih terbuka", floatClass],
+      ["Total Equity", fmtMoney(sim.totalEquity),
+        `${sim.netPnlPct >= 0 ? "+" : ""}${sim.netPnlPct.toFixed(2)}% dari modal awal`, totalClass],
     ].map(([label, val, sub, cls]) => `
       <div class="stat-card">
         <div class="stat-label">${label}</div>
@@ -1121,15 +1131,11 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.3
-- Panel "Equity Curve" (cumulative % pnl trade resolved) diganti dengan modul
-  Paper Trading: statsGrid baru (Trading Balance, Invested, Open, Net P/L,
-  Total Equity) + panel Total Equity ($ curve) + panel Cumulative Portfolio
-  Return vs SPY. Simulasi ilustratif dari trade_signals aktual (status
-  entered/tp_hit/sl_hit/closed_timeout saja) -- BUKAN transaksi riil.
-  Asumsi (const PAPER_* di script): modal awal $20,000, sizing 2% equity per
-  trade, maks 60 posisi terbuka bersamaan -- direvisi dari asumsi awal
-  10%/8 posisi setelah dicek ke DB: overlap posisi live pernah tembus 50
-  dalam 3 minggu observasi pertama. Benchmark SPY dari daily_features
-  (ticker=SPY) sejak entry_date sinyal pertama.
+v2.4
+- Kartu "Net Profit/Loss" di paperStatsGrid dipecah jadi "Realized PnL"
+  (cuma dari trade yang sudah resolved: tp_hit/sl_hit/closed_timeout) dan
+  "Floating PnL" (mark-to-market posisi yang masih entered/belum resolved) --
+  sebelumnya digabung jadi satu angka Net P/L yang membingungkan karena
+  banyak posisi masih running. "Total Equity" sekarang nunjukkin %
+  perubahan dari modal awal di sub-labelnya.
 -->
