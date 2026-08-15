@@ -312,15 +312,17 @@
   let signalRows = [];
   let activeTier = "kuat";
   let activeMainTab = "posisi"; // "snapshot" | "posisi" | "riwayat"
-  let tradesFilterType = "all";
-  let tradesFilterStatus = "resolved_only"; // relevan cuma buat tab riwayat
-  let tradesSort = { key: "signal_date", dir: -1 };
-  let tradesSearchTerm = "";
+  // State tabel Posisi Aktif & Riwayat SENGAJA dipisah total (bukan shared) --
+  // sort/filter/search/page di satu tab tidak boleh mempengaruhi tab lainnya.
+  const tabState = {
+    posisi: { filterType: "all", filterStatus: null, sort: { key: "signal_date", dir: -1 }, searchTerm: "", page: 1, totalCount: 0 },
+    riwayat: { filterType: "all", filterStatus: "resolved_only", sort: { key: "signal_date", dir: -1 }, searchTerm: "", page: 1, totalCount: 0 },
+  };
+  function curTab(){ return tabState[activeMainTab] || tabState.posisi; }
   let searchTerm = ""; // khusus search di tab Screening Snapshot
 
   const PAGE_SIZE = 30;
-  let currentPage = 1;
-  let totalSignalsCount = 0;
+  // currentPage & totalSignalsCount sekarang di tabState[activeMainTab].page/.totalCount
 
   // ============================================
   // Paper Trading — simulasi portofolio dari trade_signals aktual.
@@ -394,13 +396,14 @@
   }
 
   async function loadSignalsPage(){
-    const offset = (currentPage - 1) * PAGE_SIZE;
+    const st = curTab();
+    const offset = (st.page - 1) * PAGE_SIZE;
     const queryParams = buildTradesFilterParams();
-    const isDefaultSort = tradesSort.key === "signal_date" && tradesSort.dir === -1;
-    const isDefaultStatus = activeMainTab !== "riwayat" || tradesFilterStatus === "resolved_only";
-    const isDefaultView = currentPage === 1 && tradesFilterType === "all" && isDefaultStatus && !tradesSearchTerm && isDefaultSort;
+    const isDefaultSort = st.sort.key === "signal_date" && st.sort.dir === -1;
+    const isDefaultStatus = activeMainTab !== "riwayat" || st.filterStatus === "resolved_only";
+    const isDefaultView = st.page === 1 && st.filterType === "all" && isDefaultStatus && !st.searchTerm && isDefaultSort;
     const cacheKey = `signals_default_${activeMainTab}`;
-    const orderParam = `${tradesSort.key}.${tradesSort.dir === 1 ? "asc" : "desc"},id.desc`;
+    const orderParam = `${st.sort.key}.${st.sort.dir === 1 ? "asc" : "desc"},id.desc`;
 
     renderSignalsHeader();
 
@@ -411,7 +414,7 @@
       const cached = cacheGet(cacheKey);
       if(cached){
         signalRows = cached.data.rows;
-        totalSignalsCount = cached.data.total;
+        st.totalCount = cached.data.total;
         renderSignals();
         renderPagination();
       }
@@ -422,7 +425,7 @@
         `trade_signals_full_v?select=*&order=${orderParam}&limit=${PAGE_SIZE}&offset=${offset}${queryParams}`
       );
       signalRows = data;
-      totalSignalsCount = total;
+      st.totalCount = total;
       renderSignals();
       renderPagination();
       if(isDefaultView) cacheSet(cacheKey, { rows: data, total });
@@ -436,24 +439,25 @@
   // Persis pola pagination ussy-signal.html: nomor 1..totalPages, ellipsis
   // buat gap, first/last selalu tampil, current±1 tampil.
   function renderPagination(){
-    const totalPages = Math.max(1, Math.ceil(totalSignalsCount / PAGE_SIZE));
-    currentPage = Math.min(currentPage, totalPages);
+    const st = curTab();
+    const totalPages = Math.max(1, Math.ceil(st.totalCount / PAGE_SIZE));
+    st.page = Math.min(st.page, totalPages);
     const pag = document.getElementById("signalsPagination");
 
-    let html = `<button ${currentPage===1?"disabled":""} onclick="gotoSignalsPage(${currentPage-1})">&lsaquo;</button>`;
+    let html = `<button ${st.page===1?"disabled":""} onclick="gotoSignalsPage(${st.page-1})">&lsaquo;</button>`;
     for(let p = 1; p <= totalPages; p++){
-      if(p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1){
-        html += `<button class="${p===currentPage?"active":""}" onclick="gotoSignalsPage(${p})">${p}</button>`;
-      }else if(Math.abs(p - currentPage) === 2){
+      if(p === 1 || p === totalPages || Math.abs(p - st.page) <= 1){
+        html += `<button class="${p===st.page?"active":""}" onclick="gotoSignalsPage(${p})">${p}</button>`;
+      }else if(Math.abs(p - st.page) === 2){
         html += `<span class="ellipsis">&hellip;</span>`;
       }
     }
-    html += `<button ${currentPage===totalPages?"disabled":""} onclick="gotoSignalsPage(${currentPage+1})">&rsaquo;</button>`;
+    html += `<button ${st.page===totalPages?"disabled":""} onclick="gotoSignalsPage(${st.page+1})">&rsaquo;</button>`;
     pag.innerHTML = html;
   }
 
   function gotoSignalsPage(p){
-    currentPage = p;
+    curTab().page = p;
     loadSignalsPage();
   }
 
@@ -598,15 +602,17 @@
   };
 
   function sortTable(key){
-    if(tradesSort.key === key) tradesSort.dir *= -1;
-    else tradesSort = { key, dir: key === "signal_date" ? -1 : 1 };
-    currentPage = 1;
+    const st = curTab();
+    if(st.sort.key === key) st.sort.dir *= -1;
+    else st.sort = { key, dir: key === "signal_date" ? -1 : 1 };
+    st.page = 1;
     loadSignalsPage();
   }
 
   function sortArrow(key){
-    if(tradesSort.key !== key) return "";
-    return tradesSort.dir === 1 ? " \u25B2" : " \u25BC";
+    const st = curTab();
+    if(st.sort.key !== key) return "";
+    return st.sort.dir === 1 ? " \u25B2" : " \u25BC";
   }
 
   function renderSignalsHeader(){
@@ -621,7 +627,7 @@
     const cols = activeHeadCols();
     const countEl = document.getElementById("tradeCount");
     const countLabel = activeMainTab === "riwayat" ? "riwayat" : "posisi";
-    if(countEl) countEl.textContent = `${totalSignalsCount} ${countLabel}`;
+    if(countEl) countEl.textContent = `${curTab().totalCount} ${countLabel}`;
 
     if(filtered.length === 0){
       const emptyMsg = activeMainTab === "riwayat" ? "Belum ada posisi yang exit." : "Tidak ada posisi aktif saat ini.";
@@ -658,7 +664,7 @@
     }
     if(s.status === "entered" && s.mark_price != null && s.entry_price_actual != null){
       const floatingPnl = (s.mark_price - s.entry_price_actual) / s.entry_price_actual * 100;
-      return { text: "~" + fmt(floatingPnl) + "%", cls: floatingPnl >= 0 ? "pos" : "neg" };
+      return { text: fmt(floatingPnl) + "%", cls: floatingPnl >= 0 ? "pos" : "neg" };
     }
     return { text: "—", cls: "" };
   }
@@ -1146,16 +1152,17 @@
   }
 
   function buildTradesFilterParams(){
+    const st = curTab();
     let params = "";
-    if(tradesFilterType !== "all") params += `&strategy=eq.${tradesFilterType}`;
+    if(st.filterType !== "all") params += `&strategy=eq.${st.filterType}`;
     if(activeMainTab === "posisi"){
       params += `&status=in.(pending,entered)`;
     }else if(activeMainTab === "riwayat"){
-      params += tradesFilterStatus === "resolved_only"
+      params += st.filterStatus === "resolved_only"
         ? `&status=in.(tp_hit,sl_hit,closed_timeout)`
-        : `&status=eq.${tradesFilterStatus}`;
+        : `&status=eq.${st.filterStatus}`;
     }
-    if(tradesSearchTerm) params += `&ticker=ilike.*${encodeURIComponent(tradesSearchTerm)}*`;
+    if(st.searchTerm) params += `&ticker=ilike.*${encodeURIComponent(st.searchTerm)}*`;
     return params;
   }
 
@@ -1200,7 +1207,8 @@
   function manualRefresh(){
     const btn = document.getElementById("refreshBtn");
     if(btn){ btn.disabled = true; btn.textContent = "Memuat…"; }
-    currentPage = 1;
+    tabState.posisi.page = 1;
+    tabState.riwayat.page = 1;
     Promise.all([loadData()]).finally(() => {
       if(btn){ btn.disabled = false; btn.innerHTML = "&#8635; Refresh"; }
     });
@@ -1224,7 +1232,16 @@
     wrap.style.display = "";
     sel.innerHTML = STATUS_OPTIONS_RIWAYAT.map(([v, label]) =>
       `<option value="${v}">${escapeHtml(label)}</option>`).join("");
-    sel.value = tradesFilterStatus;
+    sel.value = curTab().filterStatus;
+  }
+
+  // Sinkronkan input search & dropdown strategi ke state tab yang lagi aktif --
+  // biar nggak kelihatan kayak "nyambung" pas pindah tab (state-nya beda,
+  // tapi kalau UI-nya nggak di-refresh, terlihat kebawa dari tab sebelumnya).
+  function syncFilterUIToTab(){
+    const st = curTab();
+    document.getElementById("searchSymbol").value = st.searchTerm;
+    document.getElementById("filterType").value = st.filterType;
   }
 
   document.querySelectorAll("#viewToggle .tab").forEach(tab => {
@@ -1239,7 +1256,7 @@
       document.getElementById("riwayatExtras").style.display = view === "riwayat" ? "block" : "none";
       if(view !== "snapshot"){
         populateStatusDropdown();
-        currentPage = 1;
+        syncFilterUIToTab();
         loadSignalsPage();
       }
     });
@@ -1251,20 +1268,24 @@
     renderTable();
   });
 
-  // Filter tabel Sinyal (tab-trades) -- server-side, reset ke halaman 1 tiap ganti
+  // Filter tabel Posisi Aktif / Riwayat -- server-side, state per-tab
+  // (curTab()), reset ke halaman 1 tiap ganti filter/sort/search.
   document.getElementById("searchSymbol").addEventListener("input", e => {
-    tradesSearchTerm = e.target.value;
-    currentPage = 1;
+    const st = curTab();
+    st.searchTerm = e.target.value;
+    st.page = 1;
     loadSignalsPage();
   });
   document.getElementById("filterType").addEventListener("change", e => {
-    tradesFilterType = e.target.value;
-    currentPage = 1;
+    const st = curTab();
+    st.filterType = e.target.value;
+    st.page = 1;
     loadSignalsPage();
   });
   document.getElementById("filterStatus").addEventListener("change", e => {
-    tradesFilterStatus = e.target.value;
-    currentPage = 1;
+    const st = curTab();
+    st.filterStatus = e.target.value;
+    st.page = 1;
     loadSignalsPage();
   });
 
@@ -1276,9 +1297,17 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.0
-- Note "Skor 0-100 tiap strategi dikalibrasi lewat backtest 3 tahun
-  terpisah..." dipindah dari selalu-tampil (di atas semua tab) ke DALAM
-  tab Screening Harian (Snapshot) saja -- ini penjelasan soal kalibrasi
-  score screening, bukan relevan buat tab Posisi Aktif/Riwayat.
+v3.1
+- BUG FIX PENTING: sort/filter/search/halaman di tab Posisi Aktif & Riwayat
+  ternyata SALING NYAMBUNG (shared global state tradesSort/tradesFilterType/
+  dst) -- sort di satu tab ikut kebawa ke tab lain. Direfactor total jadi
+  tabState{posisi:{...}, riwayat:{...}} independen penuh, termasuk sinkron
+  UI (search box, dropdown strategi/status) ikut ke-refresh pas pindah tab.
+- Floating PnL di Posisi Aktif: hapus prefix simbol "~" (nggak perlu lagi
+  karena sudah dipisah tabelnya sendiri dari Riwayat, jelas semua di situ
+  floating).
+- Klarifikasi (bukan bug): kolom pnl_pct di CSV export dari tab Posisi Aktif
+  memang kosong by design -- pnl_pct cuma keisi kalau trade sudah resolved
+  (tp_hit/sl_hit/closed_timeout), posisi entered belum punya nilai itu di
+  database (floating PnL dihitung di frontend dari mark_price).
 -->
