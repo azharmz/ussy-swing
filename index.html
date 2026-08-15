@@ -203,22 +203,23 @@
       dunia nyata atau tidak. Bukan rekomendasi finansial.
     </div>
 
-    <div class="stats-grid" id="statsGrid"></div>
-
-    <div class="stats-grid" id="paperStatsGrid"></div>
-    <div class="note" id="paperNote"></div>
-
-    <div class="panel">
-      <div class="panel-title">Total Equity <span class="tag">paper trading</span></div>
-      <div id="paperEquityChart"></div>
-    </div>
-
-    <div class="panel">
-      <div class="panel-title">Cumulative Portfolio Return <span class="tag">vs SPY</span></div>
-      <div id="returnCompareChart"></div>
-    </div>
-
     <div id="tab-trades">
+      <div id="posisiExtras" style="display:block">
+        <div class="panel">
+          <div class="panel-title">Cumulative Portfolio Return <span class="tag">posisi aktif vs SPY</span></div>
+          <div id="returnCompareChart"></div>
+        </div>
+      </div>
+
+      <div id="riwayatExtras" style="display:none">
+        <div class="stats-grid" id="paperStatsGrid"></div>
+        <div class="note" id="paperNote"></div>
+        <div class="panel">
+          <div class="panel-title">Total Equity <span class="tag">paper trading</span></div>
+          <div id="paperEquityChart"></div>
+        </div>
+      </div>
+
       <div class="filter-bar">
         <input type="text" id="searchSymbol" placeholder="Cari simbol saham...">
         <select id="filterType">
@@ -246,6 +247,8 @@
     </div>
 
     <div id="viewSnapshot" style="display:none">
+      <div class="stats-grid" id="statsGrid"></div>
+
       <div class="tabs" id="mainTabs">
         <div class="tab active" data-tier="kuat">Kuat <span class="count-tag" id="count-kuat"></span></div>
         <div class="tab" data-tier="watchlist">Watchlist <span class="count-tag" id="count-watchlist"></span></div>
@@ -518,7 +521,9 @@
           const sim = simulatePaperPortfolioDaily(takenTrades, tradingDates, closeLookup);
           renderPaperStats(sim);
           renderPaperEquityChart(sim);
-          renderReturnCompareChart(sim, spyRows);
+
+          const activeReturn = computeActivePositionsReturn(takenTrades, tradingDates, closeLookup);
+          renderReturnCompareChart(activeReturn, spyRows);
         }else{
           renderPaperStats(null);
           renderPaperEquityChart(null);
@@ -862,13 +867,41 @@
     </div>`;
   }
 
-  function renderReturnCompareChart(sim, spyRows){
+  // Return kumulatif KHUSUS posisi yang lagi aktif (status=entered) -- equal-weight
+  // rata-rata %-return tiap posisi dari entry_date-nya masing-masing sampai hari ini.
+  // Posisi baru yang buka belakangan ikut masuk rata-rata mulai dari tanggal dia buka
+  // (mulai dari 0%), BUKAN dari histori realized trade yang sudah closed.
+  function computeActivePositionsReturn(entries, tradingDates, closeLookup){
+    const active = entries.filter(t => t.status === "entered" && t.entry_price_actual);
+    if(!active.length) return null;
+    const startDate = active.reduce((min, t) => t.entry_date < min ? t.entry_date : min, active[0].entry_date);
+    const dates = tradingDates.filter(d => d >= startDate);
+    const curve = dates.map(date => {
+      const live = active.filter(t => t.entry_date <= date);
+      if(!live.length) return null;
+      const rets = live.map(t => {
+        const entry = t.entry_price_actual;
+        const closeToday = closeLookup[t.ticker] && closeLookup[t.ticker][date];
+        const px = closeToday || entry; // fallback flat kalau harga hari itu nggak ada
+        return (px / entry - 1) * 100;
+      });
+      return { date, pct: rets.reduce((a, b) => a + b, 0) / rets.length };
+    }).filter(Boolean);
+    return curve.length ? { curve, startDate } : null;
+  }
+
+  function renderReturnCompareChart(activeReturn, spyRowsFull){
     const el = document.getElementById("returnCompareChart");
-    if(!sim || sim.curve.length < 2 || !spyRows || spyRows.length < 2){
+    if(!activeReturn || activeReturn.curve.length < 2 || !spyRowsFull || spyRowsFull.length < 2){
       el.innerHTML = '<div style="color:var(--text-dim);font-size:12.5px;padding:20px 0;">Belum cukup data untuk perbandingan.</div>';
       return;
     }
-    const portPts = sim.curve.map(p => ({ date: p.date, pct: (p.equity / PAPER_START_CAPITAL - 1) * 100 }));
+    const portPts = activeReturn.curve;
+    const spyRows = spyRowsFull.filter(r => r.date >= activeReturn.startDate);
+    if(spyRows.length < 2){
+      el.innerHTML = '<div style="color:var(--text-dim);font-size:12.5px;padding:20px 0;">Belum cukup data untuk perbandingan.</div>';
+      return;
+    }
     const spyBase = spyRows[0].close;
     const spyPts = spyRows.map(r => ({ date: r.date, pct: (r.close / spyBase - 1) * 100 }));
 
@@ -888,7 +921,7 @@
 
     el.innerHTML = `
       <div style="display:flex;gap:18px;margin-bottom:8px;font-size:12px;">
-        <span><span style="display:inline-block;width:9px;height:9px;background:var(--green);border-radius:2px;margin-right:5px;"></span>Portfolio
+        <span><span style="display:inline-block;width:9px;height:9px;background:var(--green);border-radius:2px;margin-right:5px;"></span>Posisi Aktif
           <b class="mono ${portLast >= 0 ? "pos" : "neg"}">${portLast >= 0 ? "+" : ""}${portLast.toFixed(2)}%</b></span>
         <span><span style="display:inline-block;width:9px;height:9px;background:var(--purple);border-radius:2px;margin-right:5px;"></span>SPY
           <b class="mono ${spyLast >= 0 ? "pos" : "neg"}">${spyLast >= 0 ? "+" : ""}${spyLast.toFixed(2)}%</b></span>
@@ -1161,6 +1194,8 @@
       activeMainTab = view;
       document.getElementById("tab-trades").style.display = view === "snapshot" ? "none" : "block";
       document.getElementById("viewSnapshot").style.display = view === "snapshot" ? "block" : "none";
+      document.getElementById("posisiExtras").style.display = view === "posisi" ? "block" : "none";
+      document.getElementById("riwayatExtras").style.display = view === "riwayat" ? "block" : "none";
       if(view !== "snapshot"){
         populateStatusDropdown();
         currentPage = 1;
@@ -1200,19 +1235,18 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.6
-- Restrukturisasi tab utama dari 2 jadi 3 (mengikuti pola USSY TrendFoll):
-  Screening Harian (Snapshot) / Posisi Aktif (rename dari "Sinyal", default
-  tab) / Riwayat. Posisi Aktif = pending+entered saja; Riwayat = tp_hit/
-  sl_hit/closed_timeout, dengan filter status yang default EXCLUDE "missed"
-  (expired/SL sebelum entry) -- konsisten sama signal_performance view yang
-  juga exclude missed dari perhitungan, tapi tetap bisa ditelusuri lewat
-  dropdown filter kalau perlu.
-- Kolom tabel disesuaikan per tab: Posisi Aktif fokus floating (Mark,
-  Floating PnL, Hari Berjalan, tanpa kolom Outcome yang redundan karena
-  selalu RUNNING); Riwayat fokus hasil final (Outcome, Exit, Realized PnL,
-  Hari Ditahan). Render tabel sekarang data-driven per kolom aktif (CELL_
-  RENDERERS map), bukan template tetap 13 kolom.
-- Cache localStorage & CSV export ikut ke-scope per tab (cache key beda
-  buat posisi vs riwayat, biar nggak saling timpa).
+v2.7
+- Stat card & panel dipindah masuk ke tab yang relevan (sebelumnya semua
+  numpuk di atas, keliatan sama terus walau pindah tab):
+    Snapshot: statsGrid (Universe/Kuat/Watchlist/dst)
+    Posisi Aktif: panel "Cumulative Portfolio Return vs SPY"
+    Riwayat: paperStatsGrid (Trading Balance/Invested/Open/Realized/
+      Floating/Total Equity) + panel "Total Equity"
+- PENTING: "Cumulative Portfolio Return" direvisi total cakupannya --
+  sebelumnya kumulatif SELURUH histori (realized+floating sejak awal
+  observasi), sekarang HANYA posisi yang lagi aktif (status=entered):
+  equal-weight rata-rata %-return tiap posisi dari entry_date-nya
+  masing-masing sampai hari ini, dibandingkan SPY di window yang sama.
+  Posisi baru yang buka belakangan ikut masuk rata-rata mulai dari 0% pas
+  dia buka, bukan ikut kebawa histori trade yang sudah closed.
 -->
