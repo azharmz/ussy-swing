@@ -218,6 +218,17 @@
           <div class="panel-title">Total Equity <span class="tag">paper trading</span></div>
           <div id="paperEquityChart"></div>
         </div>
+        <div class="panel">
+          <div class="panel-title">Performa Sinyal <span class="tag">resolved, missed dikeluarkan</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Grup</th><th>n</th><th>Win Rate</th><th>Profit Factor</th><th>Risk/Reward</th><th>Avg PnL</th></tr>
+              </thead>
+              <tbody id="perfBreakdownBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div class="filter-bar">
@@ -243,7 +254,6 @@
         </table>
       </div>
       <div class="pagination" id="signalsPagination"></div>
-      <div class="note" id="performanceNote"></div>
     </div>
 
     <div id="viewSnapshot" style="display:none">
@@ -457,9 +467,6 @@
       render();
       updateLastRefreshIndicator(cachedScreener.cachedAt, false);
     }
-    const cachedPerf = cacheGet("signal_performance");
-    if(cachedPerf) renderPerformance(cachedPerf.data);
-
     // 2. Bersamaan itu, selalu fetch fresh dari Supabase (source of truth).
     try{
       const fresh = await sbFetch("latest_screener?select=*&order=score.desc");
@@ -482,17 +489,13 @@
       await loadSignalsPage();
 
       try{
-        const perf = await sbFetch("signal_performance?select=*");
-        renderPerformance(perf[0]);
-        cacheSet("signal_performance", perf[0]);
-      }catch(e){ console.warn("signal_performance belum tersedia:", e.message); }
-
-      try{
         const allTrades = await sbFetch(
           "trade_signals?select=ticker,strategy,status,entry_date,exit_date,entry_price_actual,exit_price,mark_price,pnl_pct" +
           "&status=in.(entered,tp_hit,sl_hit,closed_timeout)&order=entry_date.asc&limit=2000"
         );
         const takenTrades = allTrades.filter(t => t.entry_date);
+
+        renderPerfBreakdown(computePerfBreakdown(takenTrades));
 
         if(takenTrades.length){
           const firstDate = takenTrades.reduce((min, t) => t.entry_date < min ? t.entry_date : min, takenTrades[0].entry_date);
@@ -547,23 +550,20 @@
   // Sort tabel Sinyal — beda dari ussy-signal.html (yang client-side karena
   // semua trade dimuat sekaligus), di sini SERVER-SIDE karena kita paginasi
   // dari Supabase (sort cuma di 30 baris yang lagi kebuka nggak akurat).
-  // Posisi Aktif (pending+entered): fokus ke floating -- Outcome dibuang
-  // (selalu RUNNING di tab ini, redundan), Mark/PnL keduanya masih floating.
+  // Posisi Aktif (pending+entered): cuma kolom penting -- detail lengkap
+  // (Tgl Sinyal, Trigger, SL, TP, Low, High) tetap ada di modal per baris.
   const POSISI_HEAD_COLS = [
-    ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
-    ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
+    ["ticker", "Ticker"], ["strategy", "Strategi"],
+    ["entry_price_actual", "Entry"],
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
-    ["lowest_price", "Low"], ["highest_price", "High"],
     ["days_elapsed", "Hari Berjalan"],
     ["mark_exit_price", "Mark"], ["pnl_display", "Floating PnL"],
   ];
-  // Riwayat (tp_hit/sl_hit/closed_timeout/missed): fokus ke hasil final --
-  // Outcome dipertahankan (TP/SL/Timeout/Expired), PnL di sini realized.
+  // Riwayat (tp_hit/sl_hit/closed_timeout/missed): cuma kolom penting --
+  // detail lengkap tetap ada di modal per baris.
   const RIWAYAT_HEAD_COLS = [
-    ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
-    ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
-    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
-    ["lowest_price", "Low"], ["highest_price", "High"],
+    ["ticker", "Ticker"], ["strategy", "Strategi"],
+    ["entry_price_actual", "Entry"],
     ["outcome_label", "Outcome"],
     ["days_elapsed", "Hari Ditahan"],
     ["mark_exit_price", "Exit"], ["pnl_display", "Realized PnL"],
@@ -937,16 +937,57 @@
       </div>`;
   }
 
-  function renderPerformance(p){
-    if(!p || p.total_resolved === 0){
-      document.getElementById("performanceNote").textContent =
-        "Belum ada sinyal yang selesai (tp_hit/sl_hit/closed_timeout) untuk dihitung performanya.";
-      return;
+  // ============================================
+  // Performa sinyal: win rate, profit factor, risk/reward, avg PnL --
+  // dihitung client-side dari trade resolved (tp_hit/sl_hit/closed_timeout),
+  // missed dikeluarkan. Dipecah per strategi karena breakout & pullback
+  // punya karakteristik risiko yang beda jauh (lihat riset backtest).
+  // ============================================
+  function computePerfBreakdown(trades){
+    const RESOLVED = new Set(["tp_hit", "sl_hit", "closed_timeout"]);
+    const resolved = trades.filter(t => RESOLVED.has(t.status) && t.pnl_pct != null);
+
+    function statsFor(list){
+      const n = list.length;
+      if(!n) return null;
+      const wins = list.filter(t => t.pnl_pct > 0);
+      const losses = list.filter(t => t.pnl_pct <= 0);
+      const avgPnl = list.reduce((s, t) => s + t.pnl_pct, 0) / n;
+      const grossWin = wins.reduce((s, t) => s + t.pnl_pct, 0);
+      const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl_pct, 0));
+      const profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : null);
+      const avgWin = wins.length ? grossWin / wins.length : 0;
+      const avgLoss = losses.length ? Math.abs(grossLoss / losses.length) : 0;
+      const riskReward = avgLoss > 0 ? avgWin / avgLoss : null;
+      return { n, winRate: (wins.length / n) * 100, avgPnl, profitFactor, riskReward };
     }
-    document.getElementById("performanceNote").innerHTML =
-      `Performa sinyal selesai (n=${p.total_resolved}, sinyal <b>missed</b> dikeluarkan dari perhitungan): ` +
-      `win rate <b>${p.win_rate_pct}%</b>, avg PnL <b>${p.avg_pnl_pct}%</b> ` +
-      `— tp_hit: ${p.tp_hit_count}, sl_hit: ${p.sl_hit_count}, closed_timeout: ${p.closed_timeout_count}, missed: ${p.missed_count}.`;
+
+    return {
+      semua: statsFor(resolved),
+      breakout: statsFor(resolved.filter(t => t.strategy === "breakout")),
+      pullback: statsFor(resolved.filter(t => t.strategy === "pullback")),
+    };
+  }
+
+  function renderPerfBreakdown(breakdown){
+    const body = document.getElementById("perfBreakdownBody");
+    const groups = [["Semua Strategi", breakdown.semua], ["Breakout", breakdown.breakout], ["Pullback", breakdown.pullback]];
+    body.innerHTML = groups.map(([label, st]) => {
+      if(!st){
+        return `<tr><td>${label}</td><td colspan="5" style="color:var(--text-dim)">Belum ada trade resolved.</td></tr>`;
+      }
+      const pfText = st.profitFactor === Infinity ? "&#8734;" : (st.profitFactor != null ? st.profitFactor.toFixed(2) : "—");
+      const rrText = st.riskReward != null ? st.riskReward.toFixed(2) : "—";
+      const pnlCls = st.avgPnl >= 0 ? "pos" : "neg";
+      return `<tr>
+        <td>${label}</td>
+        <td class="mono">${st.n}</td>
+        <td class="mono">${st.winRate.toFixed(1)}%</td>
+        <td class="mono">${pfText}</td>
+        <td class="mono">${rrText}</td>
+        <td class="mono ${pnlCls}">${st.avgPnl >= 0 ? "+" : ""}${st.avgPnl.toFixed(2)}%</td>
+      </tr>`;
+    }).join("");
   }
 
 
@@ -1235,18 +1276,12 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.7
-- Stat card & panel dipindah masuk ke tab yang relevan (sebelumnya semua
-  numpuk di atas, keliatan sama terus walau pindah tab):
-    Snapshot: statsGrid (Universe/Kuat/Watchlist/dst)
-    Posisi Aktif: panel "Cumulative Portfolio Return vs SPY"
-    Riwayat: paperStatsGrid (Trading Balance/Invested/Open/Realized/
-      Floating/Total Equity) + panel "Total Equity"
-- PENTING: "Cumulative Portfolio Return" direvisi total cakupannya --
-  sebelumnya kumulatif SELURUH histori (realized+floating sejak awal
-  observasi), sekarang HANYA posisi yang lagi aktif (status=entered):
-  equal-weight rata-rata %-return tiap posisi dari entry_date-nya
-  masing-masing sampai hari ini, dibandingkan SPY di window yang sama.
-  Posisi baru yang buka belakangan ikut masuk rata-rata mulai dari 0% pas
-  dia buka, bukan ikut kebawa histori trade yang sudah closed.
+v2.9
+- Kolom tabel Posisi Aktif & Riwayat diramping ke yang penting aja:
+    Posisi Aktif: Ticker, Strategi, Entry, Stop Loss, Take Profit, Hari
+      Berjalan, Mark, Floating PnL (dari 12 kolom)
+    Riwayat: Ticker, Strategi, Entry, Outcome, Exit, Realized PnL, Hari
+      Ditahan (dari 13 kolom)
+  Kolom yang dibuang (Tgl Sinyal, Trigger, SL/TP di Riwayat, Low, High)
+  tetap bisa dilihat lewat modal per baris (klik row).
 -->
