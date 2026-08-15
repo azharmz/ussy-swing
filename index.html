@@ -188,21 +188,6 @@
       <div class="tab" data-view="riwayat">Riwayat</div>
     </div>
 
-    <div class="note">
-      Skor 0-100 tiap strategi dikalibrasi lewat backtest 3 tahun terpisah. <b>Breakout</b>:
-      tier Kuat = score=100 (trend+momentum+volume+RS sekaligus); tier Watchlist di bawah itu
-      belum tervalidasi solid. <b>Pullback</b>: tier Kuat = score=100 (trend+momentum, RS dibuang
-      karena menurunkan robustness); tier Watchlist = score 50 (trend saja, momentum belum masuk
-      zona pullback) — berbeda dari breakout, kombinasi ini SUDAH divalidasi terpisah dan tetap
-      lolos ambang (win rate 49.4%, profit factor 1.18 setelah outlier dibuang), meski lebih lemah
-      dari tier Kuat. Hanya tier Kuat yang menghasilkan sinyal entry/SL/TP aktual.
-      <b>Status: masa observasi live 3 bulan</b> — kriteria kedua strategi sengaja tidak diubah
-      dulu, biar hasil live jadi validasi out-of-sample yang jujur. <span style="color:var(--red)">&#9888; Breakout</span>
-      diketahui fragile: profit factor jatuh di bawah breakeven begitu outlier ticker dibuang atau
-      slippage realistis disimulasikan — dipertahankan jalan buat lihat apakah ini benar collapse di
-      dunia nyata atau tidak. Bukan rekomendasi finansial.
-    </div>
-
     <div id="tab-trades">
       <div id="posisiExtras" style="display:block">
         <div class="panel">
@@ -257,6 +242,21 @@
     </div>
 
     <div id="viewSnapshot" style="display:none">
+      <div class="note">
+        Skor 0-100 tiap strategi dikalibrasi lewat backtest 3 tahun terpisah. <b>Breakout</b>:
+        tier Kuat = score=100 (trend+momentum+volume+RS sekaligus); tier Watchlist di bawah itu
+        belum tervalidasi solid. <b>Pullback</b>: tier Kuat = score=100 (trend+momentum, RS dibuang
+        karena menurunkan robustness); tier Watchlist = score 50 (trend saja, momentum belum masuk
+        zona pullback) — berbeda dari breakout, kombinasi ini SUDAH divalidasi terpisah dan tetap
+        lolos ambang (win rate 49.4%, profit factor 1.18 setelah outlier dibuang), meski lebih lemah
+        dari tier Kuat. Hanya tier Kuat yang menghasilkan sinyal entry/SL/TP aktual.
+        <b>Status: masa observasi live 3 bulan</b> — kriteria kedua strategi sengaja tidak diubah
+        dulu, biar hasil live jadi validasi out-of-sample yang jujur. <span style="color:var(--red)">&#9888; Breakout</span>
+        diketahui fragile: profit factor jatuh di bawah breakeven begitu outlier ticker dibuang atau
+        slippage realistis disimulasikan — dipertahankan jalan buat lihat apakah ini benar collapse di
+        dunia nyata atau tidak. Bukan rekomendasi finansial.
+      </div>
+
       <div class="stats-grid" id="statsGrid"></div>
 
       <div class="tabs" id="mainTabs">
@@ -1276,12 +1276,9 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.9
-- Kolom tabel Posisi Aktif & Riwayat diramping ke yang penting aja:
-    Posisi Aktif: Ticker, Strategi, Entry, Stop Loss, Take Profit, Hari
-      Berjalan, Mark, Floating PnL (dari 12 kolom)
-    Riwayat: Ticker, Strategi, Entry, Outcome, Exit, Realized PnL, Hari
-      Ditahan (dari 13 kolom)
-  Kolom yang dibuang (Tgl Sinyal, Trigger, SL/TP di Riwayat, Low, High)
-  tetap bisa dilihat lewat modal per baris (klik row).
+v3.0
+- Note "Skor 0-100 tiap strategi dikalibrasi lewat backtest 3 tahun
+  terpisah..." dipindah dari selalu-tampil (di atas semua tab) ke DALAM
+  tab Screening Harian (Snapshot) saja -- ini penjelasan soal kalibrasi
+  score screening, bukan relevan buat tab Posisi Aktif/Riwayat.
 -->
