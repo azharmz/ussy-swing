@@ -183,8 +183,9 @@
   <div id="dashboard" style="display:none">
 
     <div class="tabs" id="viewToggle">
-      <div class="tab active" data-view="signals">Sinyal</div>
       <div class="tab" data-view="snapshot">Screening Harian (Snapshot)</div>
+      <div class="tab active" data-view="posisi">Posisi Aktif</div>
+      <div class="tab" data-view="riwayat">Riwayat</div>
     </div>
 
     <div class="note">
@@ -225,14 +226,9 @@
           <option value="breakout">Breakout</option>
           <option value="pullback">Pullback</option>
         </select>
-        <select id="filterStatus">
-          <option value="all">Semua Status</option>
-          <option value="running">RUNNING</option>
-          <option value="tp_hit">TP HIT</option>
-          <option value="sl_hit">SL HIT</option>
-          <option value="closed_timeout">TIMEOUT</option>
-          <option value="missed">EXPIRED / SL DULUAN</option>
-        </select>
+        <span id="filterStatusWrap" style="display:none">
+          <select id="filterStatus"></select>
+        </span>
         <div class="spacer"></div>
         <span class="count-tag" id="tradeCount"></span>
         <button onclick="downloadTradesCSV()">&#8681; CSV</button>
@@ -302,8 +298,9 @@
   let rows = [];
   let signalRows = [];
   let activeTier = "kuat";
+  let activeMainTab = "posisi"; // "snapshot" | "posisi" | "riwayat"
   let tradesFilterType = "all";
-  let tradesFilterStatus = "all";
+  let tradesFilterStatus = "resolved_only"; // relevan cuma buat tab riwayat
   let tradesSort = { key: "signal_date", dir: -1 };
   let tradesSearchTerm = "";
   let searchTerm = ""; // khusus search di tab Screening Snapshot
@@ -387,8 +384,9 @@
     const offset = (currentPage - 1) * PAGE_SIZE;
     const queryParams = buildTradesFilterParams();
     const isDefaultSort = tradesSort.key === "signal_date" && tradesSort.dir === -1;
-    const isDefaultView = currentPage === 1 && tradesFilterType === "all" && tradesFilterStatus === "all" && !tradesSearchTerm && isDefaultSort;
-    const cacheKey = "signals_default";
+    const isDefaultStatus = activeMainTab !== "riwayat" || tradesFilterStatus === "resolved_only";
+    const isDefaultView = currentPage === 1 && tradesFilterType === "all" && isDefaultStatus && !tradesSearchTerm && isDefaultSort;
+    const cacheKey = `signals_default_${activeMainTab}`;
     const orderParam = `${tradesSort.key}.${tradesSort.dir === 1 ? "asc" : "desc"},id.desc`;
 
     renderSignalsHeader();
@@ -491,17 +489,40 @@
           "trade_signals?select=ticker,strategy,status,entry_date,exit_date,entry_price_actual,exit_price,mark_price,pnl_pct" +
           "&status=in.(entered,tp_hit,sl_hit,closed_timeout)&order=entry_date.asc&limit=2000"
         );
-        const sim = simulatePaperPortfolio(allTrades);
-        renderPaperStats(sim);
-        renderPaperEquityChart(sim);
+        const takenTrades = allTrades.filter(t => t.entry_date);
 
-        if(sim){
-          try{
-            const spyRows = await sbFetch(
-              `daily_features?select=date,close&ticker=eq.SPY&date=gte.${sim.firstDate}&order=date.asc&limit=2000`
+        if(takenTrades.length){
+          const firstDate = takenTrades.reduce((min, t) => t.entry_date < min ? t.entry_date : min, takenTrades[0].entry_date);
+
+          // Kalender hari perdagangan + return SPY, dari daily_features (sudah ada
+          // sejak main.py push baris SPY tiap hari).
+          const spyRows = await sbFetch(
+            `daily_features?select=date,close&ticker=eq.SPY&date=gte.${firstDate}&order=date.asc&limit=2000`
+          );
+          const tradingDates = spyRows.map(r => r.date);
+
+          // Harga close tiap ticker yang pernah ditrade, buat mark-to-market
+          // posisi terbuka HARIAN (bukan cuma pas open/close event).
+          const tickers = [...new Set(takenTrades.map(t => t.ticker))];
+          const closeLookup = {};
+          if(tickers.length && tradingDates.length){
+            const priceRows = await sbFetch(
+              `daily_features?select=ticker,date,close&ticker=in.(${tickers.join(",")})` +
+              `&date=gte.${firstDate}&order=date.asc&limit=10000`
             );
-            renderReturnCompareChart(sim, spyRows);
-          }catch(e){ console.warn("data SPY buat benchmark belum bisa dimuat:", e.message); }
+            priceRows.forEach(r => {
+              (closeLookup[r.ticker] ||= {})[r.date] = r.close;
+            });
+          }
+
+          const sim = simulatePaperPortfolioDaily(takenTrades, tradingDates, closeLookup);
+          renderPaperStats(sim);
+          renderPaperEquityChart(sim);
+          renderReturnCompareChart(sim, spyRows);
+        }else{
+          renderPaperStats(null);
+          renderPaperEquityChart(null);
+          renderReturnCompareChart(null, null);
         }
       }catch(e){ console.warn("paper trading belum bisa dimuat:", e.message); }
 
@@ -521,15 +542,55 @@
   // Sort tabel Sinyal — beda dari ussy-signal.html (yang client-side karena
   // semua trade dimuat sekaligus), di sini SERVER-SIDE karena kita paginasi
   // dari Supabase (sort cuma di 30 baris yang lagi kebuka nggak akurat).
-  const SIGNALS_HEAD_COLS = [
+  // Posisi Aktif (pending+entered): fokus ke floating -- Outcome dibuang
+  // (selalu RUNNING di tab ini, redundan), Mark/PnL keduanya masih floating.
+  const POSISI_HEAD_COLS = [
+    ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
+    ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
+    ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
+    ["lowest_price", "Low"], ["highest_price", "High"],
+    ["days_elapsed", "Hari Berjalan"],
+    ["mark_exit_price", "Mark"], ["pnl_display", "Floating PnL"],
+  ];
+  // Riwayat (tp_hit/sl_hit/closed_timeout/missed): fokus ke hasil final --
+  // Outcome dipertahankan (TP/SL/Timeout/Expired), PnL di sini realized.
+  const RIWAYAT_HEAD_COLS = [
     ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
     ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
     ["lowest_price", "Low"], ["highest_price", "High"],
     ["outcome_label", "Outcome"],
-    ["days_elapsed", "Hari Berjalan"],
-    ["mark_exit_price", "Mark / Exit"], ["pnl_display", "PnL"],
+    ["days_elapsed", "Hari Ditahan"],
+    ["mark_exit_price", "Exit"], ["pnl_display", "Realized PnL"],
   ];
+  const STATUS_OPTIONS_RIWAYAT = [
+    ["resolved_only", "Semua (kecuali Expired/SL Duluan)"],
+    ["tp_hit", "TP HIT"], ["sl_hit", "SL HIT"], ["closed_timeout", "TIMEOUT"],
+    ["missed", "Expired / SL Duluan"],
+  ];
+
+  function activeHeadCols(){
+    return activeMainTab === "riwayat" ? RIWAYAT_HEAD_COLS : POSISI_HEAD_COLS;
+  }
+
+  const CELL_RENDERERS = {
+    signal_date: s => `<td class="mono">${escapeHtml(s.signal_date)}</td>`,
+    ticker: s => `<td class="symbol">${escapeHtml(s.ticker)}</td>`,
+    strategy: s => `<td>${strategyBadge(s.strategy)}</td>`,
+    entry_price: s => `<td class="mono">${fmt(s.entry_price)}</td>`,
+    entry_price_actual: s => `<td>${entryStatusBadge(s)}</td>`,
+    stop_loss: s => `<td class="mono neg">${fmt(s.stop_loss)}</td>`,
+    take_profit: s => `<td class="mono pos">${fmt(s.take_profit)}</td>`,
+    lowest_price: s => `<td class="mono">${fmt(s.lowest_price)}</td>`,
+    highest_price: s => `<td class="mono">${fmt(s.highest_price)}</td>`,
+    outcome_label: s => `<td>${outcomeBadge(s)}</td>`,
+    days_elapsed: s => `<td class="mono">${daysElapsed(s)}d</td>`,
+    mark_exit_price: s => `<td class="mono">${markExitDisplay(s)}</td>`,
+    pnl_display: s => {
+      const p = pnlDisplayFor(s);
+      return `<td class="mono ${p.cls}">${p.text}</td>`;
+    },
+  };
 
   function sortTable(key){
     if(tradesSort.key === key) tradesSort.dir *= -1;
@@ -544,7 +605,7 @@
   }
 
   function renderSignalsHeader(){
-    document.getElementById("signalsHeadRow").innerHTML = SIGNALS_HEAD_COLS.map(([key, label]) => {
+    document.getElementById("signalsHeadRow").innerHTML = activeHeadCols().map(([key, label]) => {
       if(key === null) return `<th>${label}</th>`;
       return `<th style="cursor:pointer;user-select:none" onclick="sortTable('${key}')" title="Klik untuk urutkan">${label}${sortArrow(key)}</th>`;
     }).join("");
@@ -552,32 +613,20 @@
 
   function renderSignals(){
     const filtered = signalRows;
+    const cols = activeHeadCols();
     const countEl = document.getElementById("tradeCount");
-    if(countEl) countEl.textContent = `${totalSignalsCount} sinyal`;
+    const countLabel = activeMainTab === "riwayat" ? "riwayat" : "posisi";
+    if(countEl) countEl.textContent = `${totalSignalsCount} ${countLabel}`;
 
     if(filtered.length === 0){
+      const emptyMsg = activeMainTab === "riwayat" ? "Belum ada posisi yang exit." : "Tidak ada posisi aktif saat ini.";
       document.getElementById("signalsBody").innerHTML =
-        `<tr><td colspan="13" style="text-align:center;color:var(--text-dim);padding:20px;">Belum ada sinyal.</td></tr>`;
+        `<tr><td colspan="${cols.length}" style="text-align:center;color:var(--text-dim);padding:20px;">${emptyMsg}</td></tr>`;
       return;
     }
     document.getElementById("signalsBody").innerHTML = filtered.map((s, idx) => {
-      const pnlDisplay = pnlDisplayFor(s);
-      return `
-      <tr onclick="openSignalModal(${idx})" style="cursor:pointer">
-        <td class="mono">${escapeHtml(s.signal_date)}</td>
-        <td class="symbol">${escapeHtml(s.ticker)}</td>
-        <td>${strategyBadge(s.strategy)}</td>
-        <td class="mono">${fmt(s.entry_price)}</td>
-        <td>${entryStatusBadge(s)}</td>
-        <td class="mono neg">${fmt(s.stop_loss)}</td>
-        <td class="mono pos">${fmt(s.take_profit)}</td>
-        <td class="mono">${fmt(s.lowest_price)}</td>
-        <td class="mono">${fmt(s.highest_price)}</td>
-        <td>${outcomeBadge(s)}</td>
-        <td class="mono">${daysElapsed(s)}d</td>
-        <td class="mono">${markExitDisplay(s)}</td>
-        <td class="mono ${pnlDisplay.cls}">${pnlDisplay.text}</td>
-      </tr>`;
+      const cells = cols.map(([key]) => CELL_RENDERERS[key](s)).join("");
+      return `<tr onclick="openSignalModal(${idx})" style="cursor:pointer">${cells}</tr>`;
     }).join("");
   }
 
@@ -680,68 +729,65 @@
     return "$" + Math.round(v).toLocaleString("en-US");
   }
 
-  function simulatePaperPortfolio(trades){
+  function simulatePaperPortfolioDaily(trades, tradingDates, closeLookup){
     const taken = trades.filter(t => t.entry_date)
       .sort((a, b) => new Date(a.entry_date) - new Date(b.entry_date));
-    if(!taken.length) return null;
+    if(!taken.length || !tradingDates.length) return null;
 
     const RESOLVED = new Set(["tp_hit", "sl_hit", "closed_timeout"]);
-    const events = [];
+    const opensByDate = {};
+    const exitsByDate = {};
     taken.forEach(t => {
-      events.push({ date: t.entry_date, type: "open", t });
+      (opensByDate[t.entry_date] ||= []).push(t);
       if(RESOLVED.has(t.status) && t.exit_date){
-        events.push({ date: t.exit_date, type: "close", t });
+        (exitsByDate[t.exit_date] ||= []).push(t);
       }
     });
-    // Urut kronologis; di tanggal sama, proses "close" duluan biar kas
-    // yang baru dilepas bisa dipakai lagi buat "open" di tanggal itu.
-    events.sort((a, b) => {
-      const d = new Date(a.date) - new Date(b.date);
-      if(d !== 0) return d;
-      return a.type === "close" ? -1 : 1;
-    });
+
+    function markValue(p, date){
+      const entry = p.t.entry_price_actual;
+      const closeToday = closeLookup[p.t.ticker] && closeLookup[p.t.ticker][date];
+      if(entry && closeToday) return p.size * (closeToday / entry);
+      return p.size; // fallback kalau harga hari itu nggak ada di daily_features
+    }
 
     let cash = PAPER_START_CAPITAL;
     const openPos = []; // {t, size}
     const curve = [];
     let notTakenCount = 0;
-    let realizedPnl = 0; // hanya dari posisi yang sudah resolved (tp_hit/sl_hit/closed_timeout)
+    let realizedPnl = 0; // hanya dari posisi yang sudah resolved
 
-    events.forEach(e => {
-      if(e.type === "open"){
+    tradingDates.forEach(date => {
+      // proses close dulu, biar kas kepakai lagi buat open di hari yang sama
+      (exitsByDate[date] || []).forEach(t => {
+        const idx = openPos.findIndex(p => p.t === t);
+        if(idx === -1) return;
+        const [pos] = openPos.splice(idx, 1);
+        const pnlDollar = pos.size * ((t.pnl_pct || 0) / 100);
+        cash += pos.size + pnlDollar;
+        realizedPnl += pnlDollar;
+      });
+      (opensByDate[date] || []).forEach(t => {
         if(openPos.length >= PAPER_MAX_CONCURRENT){ notTakenCount++; return; }
-        const equityNow = cash + openPos.reduce((s, p) => s + p.size, 0);
+        const equityNow = cash + openPos.reduce((s, p) => s + markValue(p, date), 0);
         const size = equityNow * PAPER_SIZE_PCT;
         if(size > cash){ notTakenCount++; return; }
         cash -= size;
-        openPos.push({ t: e.t, size });
-      }else{
-        const idx = openPos.findIndex(p => p.t === e.t);
-        if(idx === -1) return;
-        const [pos] = openPos.splice(idx, 1);
-        const pnlFrac = (e.t.pnl_pct || 0) / 100;
-        const pnlDollar = pos.size * pnlFrac;
-        cash += pos.size + pnlDollar;
-        realizedPnl += pnlDollar;
-      }
-      curve.push({ date: e.date, equity: cash + openPos.reduce((s, p) => s + p.size, 0) });
+        openPos.push({ t, size });
+      });
+      const investedToday = openPos.reduce((s, p) => s + markValue(p, date), 0);
+      curve.push({ date, equity: cash + investedToday });
     });
 
-    // Posisi masih terbuka (status=entered, belum resolved) -> mark-to-market
+    const lastDate = tradingDates[tradingDates.length - 1];
     let investedValue = 0, floatingPnl = 0;
     openPos.forEach(p => {
-      const entry = p.t.entry_price_actual, mark = p.t.mark_price;
-      const pct = (entry && mark) ? (mark - entry) / entry : 0;
-      const val = p.size * (1 + pct);
-      investedValue += val;
-      floatingPnl += val - p.size;
+      const v = markValue(p, lastDate);
+      investedValue += v;
+      floatingPnl += v - p.size;
     });
 
     const totalEquity = cash + investedValue;
-    const todayStr = new Date().toISOString().slice(0, 10);
-    if(!curve.length || curve[curve.length - 1].date !== todayStr){
-      curve.push({ date: todayStr, equity: totalEquity });
-    }
 
     return {
       cash, invested: investedValue, openCount: openPos.length,
@@ -1028,9 +1074,11 @@
   function buildTradesFilterParams(){
     let params = "";
     if(tradesFilterType !== "all") params += `&strategy=eq.${tradesFilterType}`;
-    if(tradesFilterStatus !== "all"){
-      params += tradesFilterStatus === "running"
-        ? `&status=in.(pending,entered)`
+    if(activeMainTab === "posisi"){
+      params += `&status=in.(pending,entered)`;
+    }else if(activeMainTab === "riwayat"){
+      params += tradesFilterStatus === "resolved_only"
+        ? `&status=in.(tp_hit,sl_hit,closed_timeout)`
         : `&status=eq.${tradesFilterStatus}`;
     }
     if(tradesSearchTerm) params += `&ticker=ilike.*${encodeURIComponent(tradesSearchTerm)}*`;
@@ -1070,7 +1118,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `us_swing_signals_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `us_swing_${activeMainTab}_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -1092,13 +1140,32 @@
       renderTable();
     });
   });
+  function populateStatusDropdown(){
+    const wrap = document.getElementById("filterStatusWrap");
+    const sel = document.getElementById("filterStatus");
+    if(activeMainTab !== "riwayat"){
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "";
+    sel.innerHTML = STATUS_OPTIONS_RIWAYAT.map(([v, label]) =>
+      `<option value="${v}">${escapeHtml(label)}</option>`).join("");
+    sel.value = tradesFilterStatus;
+  }
+
   document.querySelectorAll("#viewToggle .tab").forEach(tab => {
     tab.addEventListener("click", () => {
       document.querySelector("#viewToggle .tab.active").classList.remove("active");
       tab.classList.add("active");
       const view = tab.dataset.view;
-      document.getElementById("tab-trades").style.display = view === "signals" ? "block" : "none";
+      activeMainTab = view;
+      document.getElementById("tab-trades").style.display = view === "snapshot" ? "none" : "block";
       document.getElementById("viewSnapshot").style.display = view === "snapshot" ? "block" : "none";
+      if(view !== "snapshot"){
+        populateStatusDropdown();
+        currentPage = 1;
+        loadSignalsPage();
+      }
     });
   });
 
@@ -1125,17 +1192,27 @@
     loadSignalsPage();
   });
 
+  populateStatusDropdown(); // set kondisi awal (tab default = posisi -> dropdown hidden)
+
   loadData();
 </script>
 </body>
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v2.4
-- Kartu "Net Profit/Loss" di paperStatsGrid dipecah jadi "Realized PnL"
-  (cuma dari trade yang sudah resolved: tp_hit/sl_hit/closed_timeout) dan
-  "Floating PnL" (mark-to-market posisi yang masih entered/belum resolved) --
-  sebelumnya digabung jadi satu angka Net P/L yang membingungkan karena
-  banyak posisi masih running. "Total Equity" sekarang nunjukkin %
-  perubahan dari modal awal di sub-labelnya.
+v2.6
+- Restrukturisasi tab utama dari 2 jadi 3 (mengikuti pola USSY TrendFoll):
+  Screening Harian (Snapshot) / Posisi Aktif (rename dari "Sinyal", default
+  tab) / Riwayat. Posisi Aktif = pending+entered saja; Riwayat = tp_hit/
+  sl_hit/closed_timeout, dengan filter status yang default EXCLUDE "missed"
+  (expired/SL sebelum entry) -- konsisten sama signal_performance view yang
+  juga exclude missed dari perhitungan, tapi tetap bisa ditelusuri lewat
+  dropdown filter kalau perlu.
+- Kolom tabel disesuaikan per tab: Posisi Aktif fokus floating (Mark,
+  Floating PnL, Hari Berjalan, tanpa kolom Outcome yang redundan karena
+  selalu RUNNING); Riwayat fokus hasil final (Outcome, Exit, Realized PnL,
+  Hari Ditahan). Render tabel sekarang data-driven per kolom aktif (CELL_
+  RENDERERS map), bukan template tetap 13 kolom.
+- Cache localStorage & CSV export ikut ke-scope per tab (cache key beda
+  buat posisi vs riwayat, biar nggak saling timpa).
 -->
