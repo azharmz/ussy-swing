@@ -49,6 +49,7 @@
     margin-bottom:20px;
   }
   .stat-card{ background:var(--panel); padding:16px 14px; position:relative; }
+  #paperStatsGrid{ grid-template-columns:repeat(5,1fr); }
   .stat-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:8px; }
   .stat-value{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; }
   .stat-sub{ font-size:11px; color:var(--text-dim); margin-top:4px; }
@@ -557,8 +558,8 @@
   // Posisi Aktif (pending+entered): cuma kolom penting -- detail lengkap
   // (Tgl Sinyal, Trigger, SL, TP, Low, High) tetap ada di modal per baris.
   const POSISI_HEAD_COLS = [
-    ["ticker", "Ticker"], ["strategy", "Strategi"],
-    ["entry_price_actual", "Entry"],
+    ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
+    ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
     ["days_elapsed", "Hari Berjalan"],
     ["mark_exit_price", "Mark"], ["pnl_display", "Floating PnL"],
@@ -708,7 +709,9 @@
   // Berhenti hitung begitu sinyal selesai -- exit_date buat tp_hit/sl_hit/
   // closed_timeout, updated_at buat missed (yang nggak pernah diisi exit_date).
   function daysElapsed(s){
-    const signalDate = new Date(s.signal_date + "T00:00:00");
+    const ENTERED_LIKE = new Set(["entered", "tp_hit", "sl_hit", "closed_timeout"]);
+    const useEntryDate = ENTERED_LIKE.has(s.status) && s.entry_date;
+    const baseDate = new Date((useEntryDate ? s.entry_date : s.signal_date) + "T00:00:00");
     let endDate;
     if(s.exit_date){
       endDate = new Date(s.exit_date + "T00:00:00");
@@ -718,7 +721,7 @@
       endDate = new Date();
     }
     endDate.setHours(0,0,0,0);
-    const diffMs = endDate - signalDate;
+    const diffMs = endDate - baseDate;
     return Math.max(0, Math.round(diffMs / 86400000));
   }
 
@@ -818,7 +821,6 @@
       return;
     }
     const realClass = sim.realizedPnl >= 0 ? "pos" : "neg";
-    const floatClass = sim.floatingPnl >= 0 ? "pos" : "neg";
     const totalClass = sim.netPnl >= 0 ? "pos" : "neg";
     grid.innerHTML = [
       ["Trading Balance", fmtMoney(sim.cash), "kas belum terpakai", ""],
@@ -826,8 +828,6 @@
       ["Open", sim.openCount, "posisi aktif", ""],
       ["Realized PnL", `${sim.realizedPnl >= 0 ? "+" : ""}${fmtMoney(sim.realizedPnl)}`,
         "dari trade selesai", realClass],
-      ["Floating PnL", `${sim.floatingPnl >= 0 ? "+" : ""}${fmtMoney(sim.floatingPnl)}`,
-        "posisi masih terbuka", floatClass],
       ["Total Equity", fmtMoney(sim.totalEquity),
         `${sim.netPnlPct >= 0 ? "+" : ""}${sim.netPnlPct.toFixed(2)}% dari modal awal`, totalClass],
     ].map(([label, val, sub, cls]) => `
@@ -1304,11 +1304,19 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.2
-- CSV export sekarang include kolom floating_pnl_pct -- dihitung sama
-  persis kayak kolom Floating PnL di tabel Posisi Aktif ((mark_price -
-  entry_price_actual) / entry_price_actual * 100), khusus buat baris
-  status=entered. Bukan kolom asli database, dihitung on-the-fly pas
-  generate CSV. Baris resolved tetap pakai pnl_pct asli (nggak dihitung
-  ulang, sudah ada nilainya).
+v3.3
+- Kolom Tgl Sinyal & Trigger dikembalikan ke tabel Posisi Aktif (sempat
+  dibuang di v2.9, ternyata masih dibutuhkan).
+- PENTING: 'Hari Berjalan' dipisah basis hitungnya -- sebelumnya kontinu
+  dari signal_date (durasi pending + entered digabung). Sekarang begitu
+  status jadi entered/resolved, hitungan MULAI ULANG dari entry_date
+  (independen dari durasi pending sebelumnya) -- pending maks 3 hari
+  (ENTRY_WINDOW_DAYS), entered maks 10 hari (HOLDING_PERIOD_DAYS) berdiri
+  sendiri-sendiri, bukan lagi maks gabungan 13 hari yang membingungkan.
+  View trade_signals_v (Supabase) & daysElapsed() di frontend direvisi
+  bareng biar konsisten (sort kolom ini juga ikut view yang baru).
+- Kartu 'Floating PnL' dibuang dari paperStatsGrid (tab Riwayat) -- nggak
+  relevan di situ karena Riwayat fokus ke trade yang sudah selesai.
+  paperStatsGrid sekarang 5 kartu: Trading Balance, Invested, Open,
+  Realized PnL, Total Equity.
 -->
