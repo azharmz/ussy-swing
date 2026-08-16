@@ -514,13 +514,27 @@
 
           // Harga close tiap ticker yang pernah ditrade, buat mark-to-market
           // posisi terbuka HARIAN (bukan cuma pas open/close event).
+          // PENTING: di-paginasi manual -- Supabase/PostgREST punya batas default
+          // 1000 baris per response yang OVERRIDE parameter limit di URL. Kalau
+          // kebutuhan (jumlah ticker x jumlah hari) lebih dari 1000, fetch satu
+          // kali bakal ke-truncate diam-diam (nggak error, cuma hasilnya kurang) --
+          // ini persis yang bikin tanggal-tanggal terbaru "hilang" dari closeLookup
+          // dan Cumulative Portfolio Return jatuh ke 0% di hari-hari terakhir.
           const tickers = [...new Set(takenTrades.map(t => t.ticker))];
           const closeLookup = {};
           if(tickers.length && tradingDates.length){
-            const priceRows = await sbFetch(
-              `daily_features?select=ticker,date,close&ticker=in.(${tickers.join(",")})` +
-              `&date=gte.${firstDate}&order=date.asc&limit=10000`
-            );
+            const PAGE = 1000;
+            let offset = 0;
+            let priceRows = [];
+            while(true){
+              const batch = await sbFetch(
+                `daily_features?select=ticker,date,close&ticker=in.(${tickers.join(",")})` +
+                `&date=gte.${firstDate}&order=date.asc,ticker.asc&limit=${PAGE}&offset=${offset}`
+              );
+              priceRows = priceRows.concat(batch);
+              if(batch.length < PAGE) break;
+              offset += PAGE;
+            }
             priceRows.forEach(r => {
               (closeLookup[r.ticker] ||= {})[r.date] = r.close;
             });
@@ -1304,19 +1318,17 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.3
-- Kolom Tgl Sinyal & Trigger dikembalikan ke tabel Posisi Aktif (sempat
-  dibuang di v2.9, ternyata masih dibutuhkan).
-- PENTING: 'Hari Berjalan' dipisah basis hitungnya -- sebelumnya kontinu
-  dari signal_date (durasi pending + entered digabung). Sekarang begitu
-  status jadi entered/resolved, hitungan MULAI ULANG dari entry_date
-  (independen dari durasi pending sebelumnya) -- pending maks 3 hari
-  (ENTRY_WINDOW_DAYS), entered maks 10 hari (HOLDING_PERIOD_DAYS) berdiri
-  sendiri-sendiri, bukan lagi maks gabungan 13 hari yang membingungkan.
-  View trade_signals_v (Supabase) & daysElapsed() di frontend direvisi
-  bareng biar konsisten (sort kolom ini juga ikut view yang baru).
-- Kartu 'Floating PnL' dibuang dari paperStatsGrid (tab Riwayat) -- nggak
-  relevan di situ karena Riwayat fokus ke trade yang sudah selesai.
-  paperStatsGrid sekarang 5 kartu: Trading Balance, Invested, Open,
-  Realized PnL, Total Equity.
+v3.4
+- BUG FIX PENTING (akar masalah Cumulative Portfolio Return nunjukkin flat
+  0% di hari-hari terbaru): fetch daily_features buat closeLookup (mark-to-
+  market harian) ke-truncate diam-diam di batas default Supabase/PostgREST
+  1000 baris per response -- parameter limit=10000 di URL TIDAK meng-
+  override batas server ini. Dengan puluhan ticker x puluhan hari, kebutuhan
+  baris gampang lewat 1000, dan karena di-order date.asc, yang kepotong
+  adalah tanggal-tanggal TERBARU -- persis kenapa hari-hari terakhir jatuh
+  ke 0% (fallback ke harga entry karena data harga hari itu kosong).
+  Fix: fetch di-paginasi manual (loop per 1000 baris + order deterministik
+  date.asc,ticker.asc, sampai batch < 1000) sampai semua data ke-ambil.
+  Fetch lain (allTrades, spyRows, tabel Sinyal) masih aman di bawah 1000
+  baris untuk saat ini, belum perlu paginasi serupa.
 -->
