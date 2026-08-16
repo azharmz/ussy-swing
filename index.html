@@ -1182,13 +1182,20 @@
 
     const cols = ["signal_date","ticker","strategy","entry_price","entry_price_actual","entry_date",
                   "stop_loss","take_profit","lowest_price","highest_price","status","missed_reason",
-                  "mark_price","exit_price","exit_date","pnl_pct",
+                  "mark_price","exit_price","exit_date","pnl_pct","floating_pnl_pct",
                   "snapshot_score","snapshot_tier","snapshot_close","snapshot_rsi14","snapshot_atr14_pct",
                   "snapshot_dist_ma20_pct","snapshot_relative_volume","snapshot_rs_vs_spy","snapshot_signals"];
     const csvLines = [cols.join(",")];
     for(const row of data){
+      // floating_pnl_pct bukan kolom asli di database -- dihitung sama persis
+      // kayak kolom Floating PnL di tabel Posisi Aktif, cuma buat baris entered
+      // (yang resolved sudah punya pnl_pct asli, nggak perlu dihitung ulang).
+      const floatingPnl = (row.status === "entered" && row.mark_price != null && row.entry_price_actual != null)
+        ? (row.mark_price - row.entry_price_actual) / row.entry_price_actual * 100
+        : null;
+      const rowWithFloating = { ...row, floating_pnl_pct: floatingPnl != null ? floatingPnl.toFixed(2) : null };
       csvLines.push(cols.map(c => {
-        let v = row[c];
+        let v = rowWithFloating[c];
         if(v == null) return "";
         if(Array.isArray(v)) v = v.join(" | "); // snapshot_signals -- array jadi "Trend Bullish | Pullback ke MA20"
         const s = String(v);
@@ -1297,17 +1304,11 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.1
-- BUG FIX PENTING: sort/filter/search/halaman di tab Posisi Aktif & Riwayat
-  ternyata SALING NYAMBUNG (shared global state tradesSort/tradesFilterType/
-  dst) -- sort di satu tab ikut kebawa ke tab lain. Direfactor total jadi
-  tabState{posisi:{...}, riwayat:{...}} independen penuh, termasuk sinkron
-  UI (search box, dropdown strategi/status) ikut ke-refresh pas pindah tab.
-- Floating PnL di Posisi Aktif: hapus prefix simbol "~" (nggak perlu lagi
-  karena sudah dipisah tabelnya sendiri dari Riwayat, jelas semua di situ
-  floating).
-- Klarifikasi (bukan bug): kolom pnl_pct di CSV export dari tab Posisi Aktif
-  memang kosong by design -- pnl_pct cuma keisi kalau trade sudah resolved
-  (tp_hit/sl_hit/closed_timeout), posisi entered belum punya nilai itu di
-  database (floating PnL dihitung di frontend dari mark_price).
+v3.2
+- CSV export sekarang include kolom floating_pnl_pct -- dihitung sama
+  persis kayak kolom Floating PnL di tabel Posisi Aktif ((mark_price -
+  entry_price_actual) / entry_price_actual * 100), khusus buat baris
+  status=entered. Bukan kolom asli database, dihitung on-the-fly pas
+  generate CSV. Baris resolved tetap pakai pnl_pct asli (nggak dihitung
+  ulang, sudah ada nilainya).
 -->
