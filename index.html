@@ -632,7 +632,7 @@
     ["ticker", "Ticker"], ["strategy", "Strategi"],
     ["entry_price_actual", "Entry"],
     ["outcome_label", "Outcome"],
-    ["days_elapsed", "Hari Ditahan"],
+    ["days_in_status", "Hari Ditahan"],
     ["mark_exit_price", "Exit"], ["pnl_display", "Realized PnL"],
   ];
   const STATUS_OPTIONS_RIWAYAT = [
@@ -656,7 +656,6 @@
     lowest_price: s => `<td class="mono">${fmt(s.lowest_price)}</td>`,
     highest_price: s => `<td class="mono">${fmt(s.highest_price)}</td>`,
     outcome_label: s => `<td>${outcomeBadge(s)}</td>`,
-    days_elapsed: s => `<td class="mono">${daysElapsed(s)}d</td>`,
     days_in_status: s => `<td class="mono">${s.days_in_status ?? 0}d</td>`,
     mark_exit_price: s => `<td class="mono">${markExitDisplay(s)}</td>`,
     pnl_display: s => {
@@ -764,28 +763,6 @@
     };
     const [label, cls] = map[s.status] || [s.status.toUpperCase(), "no_signal"];
     return `<span class="badge badge-${cls}">${label}</span>`;
-  }
-
-  // Hari berjalan berkelanjutan sejak sinyal muncul (kalender, bukan hari
-  // bursa -- pendekatan, bukan presisi mutlak). Tidak reset saat status
-  // pindah dari pending ke entered, beda dari days_in_status internal.
-  // Berhenti hitung begitu sinyal selesai -- exit_date buat tp_hit/sl_hit/
-  // closed_timeout, updated_at buat missed (yang nggak pernah diisi exit_date).
-  function daysElapsed(s){
-    const ENTERED_LIKE = new Set(["entered", "tp_hit", "sl_hit", "closed_timeout"]);
-    const useEntryDate = ENTERED_LIKE.has(s.status) && s.entry_date;
-    const baseDate = new Date((useEntryDate ? s.entry_date : s.signal_date) + "T00:00:00");
-    let endDate;
-    if(s.exit_date){
-      endDate = new Date(s.exit_date + "T00:00:00");
-    }else if(s.status === "missed" && s.updated_at){
-      endDate = new Date(s.updated_at);
-    }else{
-      endDate = new Date();
-    }
-    endDate.setHours(0,0,0,0);
-    const diffMs = endDate - baseDate;
-    return Math.max(0, Math.round(diffMs / 86400000));
   }
 
   function strategyBadge(strategy){
@@ -1352,10 +1329,8 @@
     html += fieldHtml("Low / High selama jalan", `${fmt(s.lowest_price)} / ${fmt(s.highest_price)}`);
     html += fieldHtml("Mark / Exit", markExitDisplay(s));
     html += fieldHtml("PnL", pnlDisplay.text);
-    const isOngoing = s.status === "pending" || s.status === "entered";
-    html += fieldHtml(isOngoing ? "Hari Berjalan" : "Hari Ditahan",
-      (isOngoing ? (s.days_in_status ?? 0) : daysElapsed(s)) + "d" +
-      (isOngoing ? " (trading day)" : " (kalender)"));
+    html += fieldHtml(s.status === "pending" || s.status === "entered" ? "Hari Berjalan" : "Hari Ditahan",
+      (s.days_in_status ?? 0) + "d (trading day)");
     if(s.missed_reason) html += fieldHtml("Alasan Gagal", s.missed_reason === "sl_hit_before_entry" ? "SL sebelum sempat entry" : "Habis waktu (expired)");
     html += `</div>`;
 
@@ -1536,17 +1511,16 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.7
-- 'Hari Berjalan' di tab Posisi Aktif sekarang pakai days_in_status
-  (trading day, sumber dari backend signal_engine.py) -- bukan hitung
-  kalender (days_elapsed) lagi. Cron cuma jalan hari kerja, jadi
-  days_in_status otomatis ngitung hari bursa, konsisten sama threshold
-  ENTRY_WINDOW_DAYS=3 / HOLDING_PERIOD_DAYS=10 yang beneran dipakai
-  produksi -- sebelumnya kalender bisa lebih besar dari trading day
-  kalau ada weekend di antaranya, jadi nggak match sama logic asli.
-  'Hari Ditahan' di tab Riwayat TETAP kalender (durasi riil trade
-  selesai), cuma Posisi Aktif yang diubah.
-- Modal detail per baris ikut nyesuaikan: label & sumber data (trading
-  day vs kalender) sekarang tergantung status baris (ongoing vs
-  resolved), bukan selalu kalender.
+v3.8
+- Kelewat di v3.7: "Hari Ditahan" di tab Riwayat masih pakai days_elapsed
+  (kalender) padahal seharusnya ikut diganti days_in_status juga, sekarang
+  konsisten sama Posisi Aktif -- karena signal_engine.py v3 udah nge-fix
+  days_in_status akurat sampai hari terakhir buat SEMUA status (termasuk
+  resolved & missed), jadi aman dipakai di semua konteks.
+- Simplifikasi: fungsi daysElapsed() (kalender) dan kolom days_elapsed
+  di CELL_RENDERERS dihapus total dari frontend, sudah nggak dipakai
+  sama sekali -- semua "Hari Berjalan"/"Hari Ditahan" sekarang seragam
+  dari days_in_status (trading day, sumber backend). View trade_signals_v
+  (Supabase) masih punya kolom days_elapsed tapi sekarang unused, nggak
+  masalah dibiarkan (harmless), bisa di-cleanup nanti kalau mau.
 -->
