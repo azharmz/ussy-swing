@@ -49,7 +49,7 @@
     margin-bottom:20px;
   }
   .stat-card{ background:var(--panel); padding:16px 14px; position:relative; }
-  #paperStatsGrid{ grid-template-columns:repeat(5,1fr); }
+  #paperStatsGrid, #exposureStatsGrid{ grid-template-columns:repeat(5,1fr); }
   .stat-label{ font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:8px; }
   .stat-value{ font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; }
   .stat-sub{ font-size:11px; color:var(--text-dim); margin-top:4px; }
@@ -152,14 +152,14 @@
   footer{ text-align:center; color:var(--text-dim); font-size:11.5px; margin-top:30px; }
 
   @media (max-width:900px){
-    .stats-grid, #paperStatsGrid{ grid-template-columns:repeat(3,1fr); }
+    .stats-grid, #paperStatsGrid, #exposureStatsGrid{ grid-template-columns:repeat(3,1fr); }
     .field-grid{ grid-template-columns:repeat(2,1fr); }
   }
   @media (max-width:600px){
     .wrap{ padding:18px 14px 40px; }
     header{ padding-bottom:14px; margin-bottom:18px; gap:12px; }
     h1{ font-size:21px; }
-    .stats-grid, #paperStatsGrid{ grid-template-columns:repeat(2,1fr); }
+    .stats-grid, #paperStatsGrid, #exposureStatsGrid{ grid-template-columns:repeat(2,1fr); }
     .field-grid{ grid-template-columns:1fr; gap:8px; }
   }
 </style>
@@ -191,6 +191,33 @@
 
     <div id="tab-trades">
       <div id="posisiExtras" style="display:block">
+        <div class="stats-grid" id="exposureStatsGrid"></div>
+        <div class="note" id="portfolioHeatNote"></div>
+
+        <div class="panel">
+          <div class="panel-title">Top 5 Konsentrasi <span class="tag">by posisi value</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Ticker</th><th>Strategi</th><th>Nilai Posisi</th><th>% dari Total Invested</th></tr>
+              </thead>
+              <tbody id="exposureTop5Body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Konsentrasi per Sektor <span class="tag">data Musaffa Q2 2026</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Sektor</th><th>Jml Posisi</th><th>Nilai Posisi</th><th>% dari Total Invested</th><th>Risiko ke SL</th></tr>
+              </thead>
+              <tbody id="exposureSectorBody"></tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="panel">
           <div class="panel-title">Cumulative Portfolio Return <span class="tag">posisi aktif vs SPY</span></div>
           <div id="returnCompareChart"></div>
@@ -203,6 +230,17 @@
         <div class="panel">
           <div class="panel-title">Total Equity <span class="tag">paper trading</span></div>
           <div id="paperEquityChart"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">Drawdown <span class="tag">mark-to-market vs realized-only</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Basis</th><th>Max Drawdown</th><th>Peak Equity</th><th>Recovery</th></tr>
+              </thead>
+              <tbody id="drawdownBody"></tbody>
+            </table>
+          </div>
         </div>
         <div class="panel">
           <div class="panel-title">Performa Sinyal <span class="tag">resolved, missed dikeluarkan</span></div>
@@ -495,7 +533,7 @@
 
       try{
         const allTrades = await sbFetch(
-          "trade_signals?select=ticker,strategy,status,entry_date,exit_date,entry_price_actual,exit_price,mark_price,pnl_pct" +
+          "trade_signals?select=ticker,strategy,status,entry_date,exit_date,entry_price_actual,exit_price,mark_price,pnl_pct,stop_loss,take_profit" +
           "&status=in.(entered,tp_hit,sl_hit,closed_timeout)&order=entry_date.asc&limit=2000"
         );
         const takenTrades = allTrades.filter(t => t.entry_date);
@@ -543,13 +581,23 @@
           const sim = simulatePaperPortfolioDaily(takenTrades, tradingDates, closeLookup);
           renderPaperStats(sim);
           renderPaperEquityChart(sim);
+          renderDrawdown(sim);
 
           const activeReturn = computeActivePositionsReturn(takenTrades, tradingDates, closeLookup);
           renderReturnCompareChart(activeReturn, spyRows);
+
+          let sectorLookup = {};
+          try{
+            const sectorRows = await sbFetch("ticker_sector?select=ticker,sector");
+            sectorRows.forEach(r => { sectorLookup[r.ticker] = r.sector; });
+          }catch(e){ console.warn("ticker_sector belum bisa dimuat:", e.message); }
+          renderExposureSnapshot(computeExposureSnapshot(sim, sectorLookup));
         }else{
           renderPaperStats(null);
           renderPaperEquityChart(null);
+          renderDrawdown(null);
           renderReturnCompareChart(null, null);
+          renderExposureSnapshot(null);
         }
       }catch(e){ console.warn("paper trading belum bisa dimuat:", e.message); }
 
@@ -781,7 +829,7 @@
 
     let cash = PAPER_START_CAPITAL;
     const openPos = []; // {t, size}
-    const curve = [];
+    const curve = []; // equity mark-to-market harian (cash + invested MTM)
     let notTakenCount = 0;
     let realizedPnl = 0; // hanya dari posisi yang sudah resolved
 
@@ -804,15 +852,24 @@
         openPos.push({ t, size });
       });
       const investedToday = openPos.reduce((s, p) => s + markValue(p, date), 0);
-      curve.push({ date, equity: cash + investedToday });
+      // realizedEquity: modal awal + akumulasi PnL yang SUDAH direalisasi sampai
+      // hari ini -- flat di hari-hari tanpa closing, cuma "lompat" pas ada trade
+      // resolve. Beda dari `equity` (MTM) yang bergerak tiap hari ikut floating.
+      curve.push({ date, equity: cash + investedToday, realizedEquity: PAPER_START_CAPITAL + realizedPnl });
     });
 
     const lastDate = tradingDates[tradingDates.length - 1];
     let investedValue = 0, floatingPnl = 0;
+    const openPositions = [];
     openPos.forEach(p => {
       const v = markValue(p, lastDate);
       investedValue += v;
       floatingPnl += v - p.size;
+      openPositions.push({
+        ticker: p.t.ticker, strategy: p.t.strategy, size: p.size, currentValue: v,
+        entry: p.t.entry_price_actual, stopLoss: p.t.stop_loss, takeProfit: p.t.take_profit,
+        markPrice: p.t.mark_price,
+      });
     });
 
     const totalEquity = cash + investedValue;
@@ -822,8 +879,165 @@
       totalEquity, realizedPnl, floatingPnl,
       netPnl: totalEquity - PAPER_START_CAPITAL,
       netPnlPct: (totalEquity / PAPER_START_CAPITAL - 1) * 100,
-      curve, notTakenCount, firstDate: taken[0].entry_date
+      curve, notTakenCount, firstDate: taken[0].entry_date, openPositions
     };
+  }
+
+  // Max Drawdown -- peak-to-trough dari kurva equity (running peak, cari
+  // penurunan terdalam dari peak itu), plus recovery: hari pertama setelah
+  // trough saat equity balik ke level peak sebelumnya (null kalau belum).
+  function computeMaxDrawdown(curve, valueKey){
+    let peak = -Infinity, peakDateAtPeak = null;
+    let maxDD = 0, troughDate = null, peakAtTrough = null, peakDateAtTrough = null;
+    curve.forEach(p => {
+      const v = p[valueKey];
+      if(v > peak){ peak = v; peakDateAtPeak = p.date; }
+      const dd = (v / peak - 1) * 100;
+      if(dd < maxDD){
+        maxDD = dd; troughDate = p.date; peakAtTrough = peak; peakDateAtTrough = peakDateAtPeak;
+      }
+    });
+    let recoveryDate = null;
+    if(troughDate){
+      const troughIdx = curve.findIndex(p => p.date === troughDate);
+      for(let i = troughIdx + 1; i < curve.length; i++){
+        if(curve[i][valueKey] >= peakAtTrough){ recoveryDate = curve[i].date; break; }
+      }
+    }
+    return { maxDD, peak: peakAtTrough, peakDate: peakDateAtTrough, troughDate, recoveryDate };
+  }
+
+  function renderDrawdown(sim){
+    const body = document.getElementById("drawdownBody");
+    if(!sim || !sim.curve.length){
+      body.innerHTML = `<tr><td colspan="4" style="color:var(--text-dim)">Belum ada data.</td></tr>`;
+      return;
+    }
+    const mtm = computeMaxDrawdown(sim.curve, "equity");
+    const realized = computeMaxDrawdown(sim.curve, "realizedEquity");
+    const rows = [["Mark-to-Market", mtm], ["Realized-only", realized]];
+    body.innerHTML = rows.map(([label, dd]) => {
+      const recoveryText = dd.maxDD === 0 ? "—"
+        : dd.recoveryDate ? `pulih ${dd.recoveryDate}` : "belum pulih";
+      return `<tr>
+        <td>${label}</td>
+        <td class="mono neg">${dd.maxDD.toFixed(2)}%</td>
+        <td class="mono">${fmtMoney(dd.peak)} <span style="color:var(--text-dim);font-size:11px;">(${dd.peakDate || "—"})</span></td>
+        <td class="mono">${recoveryText}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // ============================================
+  // Exposure Snapshot + Portfolio Heat -- risiko riil dari 30+ posisi aktif
+  // sekarang, bukan cuma "berapa banyak posisi". Semua dihitung dari
+  // openPositions (hasil simulatePaperPortfolioDaily) + harga SL/TP asli.
+  // Nggak ada data sektor/industri di database -- jadi konsentrasi cuma
+  // dihitung per TICKER, bukan per sektor (sesuai keterbatasan data yang ada).
+  // ============================================
+  function computeExposureSnapshot(sim, sectorLookup){
+    if(!sim || !sim.openPositions.length) return null;
+    const positions = sim.openPositions;
+    const n = positions.length;
+
+    let totalRisk = 0, totalReward = 0, sumDistToSL = 0, sumDistToTP = 0;
+    let riskCountAbove5pct = 0;
+    const detail = positions.map(p => {
+      const markOrEntry = p.markPrice != null ? p.markPrice : p.entry;
+      const riskFrac = p.stopLoss != null ? (p.entry - p.stopLoss) / p.entry : 0;
+      const rewardFrac = p.takeProfit != null ? (p.takeProfit - p.entry) / p.entry : 0;
+      const riskDollar = p.size * riskFrac;
+      const rewardDollar = p.size * rewardFrac;
+      const distToSL = p.stopLoss != null ? (markOrEntry - p.stopLoss) / markOrEntry * 100 : null;
+      const distToTP = p.takeProfit != null ? (p.takeProfit - markOrEntry) / markOrEntry * 100 : null;
+      const sector = (sectorLookup && sectorLookup[p.ticker]) || "Lainnya";
+      totalRisk += riskDollar;
+      totalReward += rewardDollar;
+      if(distToSL != null) sumDistToSL += distToSL;
+      if(distToTP != null) sumDistToTP += distToTP;
+      if(riskFrac > 0.05) riskCountAbove5pct++;
+      return { ...p, riskDollar, rewardDollar, distToSL, distToTP, sector };
+    });
+
+    const sortedByValue = [...detail].sort((a, b) => b.currentValue - a.currentValue);
+    const top5 = sortedByValue.slice(0, 5);
+    const largest = sortedByValue[0];
+    const avgAllocation = sim.invested / n;
+
+    // Konsentrasi per sektor -- dari tabel ticker_sector (data Musaffa Q2 2026).
+    const sectorMap = {};
+    detail.forEach(p => {
+      const s = sectorMap[p.sector] || (sectorMap[p.sector] = { sector: p.sector, count: 0, value: 0, risk: 0 });
+      s.count += 1; s.value += p.currentValue; s.risk += p.riskDollar;
+    });
+    const bySector = Object.values(sectorMap).sort((a, b) => b.value - a.value);
+    const largestSector = bySector[0];
+
+    return {
+      openCount: n,
+      totalPositionValue: sim.invested,
+      pctEquityInvested: (sim.invested / sim.totalEquity) * 100,
+      cashAvailable: sim.cash,
+      avgAllocation, largestAllocation: largest ? largest.currentValue : 0, largestTicker: largest ? largest.ticker : "—",
+      totalRisk, riskPctOfEquity: (totalRisk / sim.totalEquity) * 100,
+      riskCountAbove5pct,
+      totalReward, rewardRiskRatio: totalRisk > 0 ? totalReward / totalRisk : null,
+      avgDistToSL: sumDistToSL / n, avgDistToTP: sumDistToTP / n,
+      top5, bySector, largestSector,
+    };
+  }
+
+  function renderExposureSnapshot(exp){
+    const grid = document.getElementById("exposureStatsGrid");
+    const heatNote = document.getElementById("portfolioHeatNote");
+    const top5Body = document.getElementById("exposureTop5Body");
+    const sectorBody = document.getElementById("exposureSectorBody");
+    if(!exp){
+      grid.innerHTML = "";
+      heatNote.innerHTML = "";
+      top5Body.innerHTML = `<tr><td colspan="4" style="color:var(--text-dim)">Belum ada posisi aktif.</td></tr>`;
+      if(sectorBody) sectorBody.innerHTML = `<tr><td colspan="4" style="color:var(--text-dim)">Belum ada posisi aktif.</td></tr>`;
+      return;
+    }
+    const heatCls = exp.riskPctOfEquity >= 40 ? "neg" : exp.riskPctOfEquity >= 20 ? "" : "pos";
+    const sectorPct = exp.largestSector ? (exp.largestSector.value / exp.totalPositionValue * 100) : 0;
+    grid.innerHTML = [
+      ["Posisi Aktif", exp.openCount, `alokasi rata-rata ${fmtMoney(exp.avgAllocation)}`, ""],
+      ["% Equity Invested", exp.pctEquityInvested.toFixed(1) + "%", `kas tersisa ${fmtMoney(exp.cashAvailable)}`, ""],
+      ["Portfolio Heat", exp.riskPctOfEquity.toFixed(1) + "%", `risiko kalau SEMUA kena SL`, heatCls],
+      ["Reward/Risk", exp.rewardRiskRatio != null ? exp.rewardRiskRatio.toFixed(2) + "x" : "—", `total upside ke TP ${fmtMoney(exp.totalReward)}`, ""],
+      ["Sektor Terbesar", exp.largestSector ? exp.largestSector.sector : "—", `${sectorPct.toFixed(1)}% dari total posisi`, ""],
+    ].map(([label, val, sub, cls]) => `
+      <div class="stat-card">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value ${cls}">${val}</div>
+        <div class="stat-sub ${cls}">${sub}</div>
+      </div>`).join("");
+
+    heatNote.innerHTML = `<b>Portfolio Heat</b> = total kerugian potensial (${fmtMoney(exp.totalRisk)}) kalau ` +
+      `SELURUH posisi aktif kena Stop Loss sekaligus, dibagi Total Equity. ${exp.riskCountAbove5pct} dari ` +
+      `${exp.openCount} posisi punya risiko individual &gt;5% (jarak entry ke SL). Rata-rata jarak ke SL ` +
+      `${exp.avgDistToSL.toFixed(1)}%, ke TP ${exp.avgDistToTP.toFixed(1)}% (dari harga terkini). ` +
+      `Alokasi terbesar per ticker: <b>${escapeHtml(exp.largestTicker)}</b> (${fmtMoney(exp.largestAllocation)}).`;
+
+    top5Body.innerHTML = exp.top5.map(p => `
+      <tr>
+        <td class="symbol">${escapeHtml(p.ticker)}</td>
+        <td>${strategyBadge(p.strategy)}</td>
+        <td class="mono">${fmtMoney(p.currentValue)}</td>
+        <td class="mono">${(p.currentValue / exp.totalPositionValue * 100).toFixed(1)}%</td>
+      </tr>`).join("");
+
+    if(sectorBody){
+      sectorBody.innerHTML = exp.bySector.map(s => `
+        <tr>
+          <td>${escapeHtml(s.sector)}</td>
+          <td class="mono">${s.count}</td>
+          <td class="mono">${fmtMoney(s.value)}</td>
+          <td class="mono">${(s.value / exp.totalPositionValue * 100).toFixed(1)}%</td>
+          <td class="mono">${fmtMoney(s.risk)}</td>
+        </tr>`).join("");
+    }
   }
 
   function renderPaperStats(sim){
@@ -1318,17 +1532,14 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.4
-- BUG FIX PENTING (akar masalah Cumulative Portfolio Return nunjukkin flat
-  0% di hari-hari terbaru): fetch daily_features buat closeLookup (mark-to-
-  market harian) ke-truncate diam-diam di batas default Supabase/PostgREST
-  1000 baris per response -- parameter limit=10000 di URL TIDAK meng-
-  override batas server ini. Dengan puluhan ticker x puluhan hari, kebutuhan
-  baris gampang lewat 1000, dan karena di-order date.asc, yang kepotong
-  adalah tanggal-tanggal TERBARU -- persis kenapa hari-hari terakhir jatuh
-  ke 0% (fallback ke harga entry karena data harga hari itu kosong).
-  Fix: fetch di-paginasi manual (loop per 1000 baris + order deterministik
-  date.asc,ticker.asc, sampai batch < 1000) sampai semua data ke-ambil.
-  Fetch lain (allTrades, spyRows, tabel Sinyal) masih aman di bawah 1000
-  baris untuk saat ini, belum perlu paginasi serupa.
+v3.6
+- Tabel baru di Supabase: ticker_sector (ticker, sector, industry), diisi
+  dari data Musaffa Q2 2026 (199 baris, sama dengan UNIVERSE terbaru).
+  Read-only utk anon/authenticated, sama kayak tabel lain.
+- Exposure Snapshot (tab Posisi Aktif) sekarang punya panel "Konsentrasi
+  per Sektor" -- jumlah posisi, nilai posisi, % dari total invested, dan
+  risiko ke SL per sektor. Kartu "Alokasi Terbesar" di stats grid diganti
+  "Sektor Terbesar" (alokasi terbesar per-ticker dipindah ke note di
+  bawah grid, bukan dihapus). Sebelumnya konsentrasi cuma bisa dihitung
+  per ticker karena nggak ada data sektor di database sama sekali.
 -->
