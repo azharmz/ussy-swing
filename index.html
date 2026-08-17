@@ -623,7 +623,7 @@
     ["signal_date", "Tgl Sinyal"], ["ticker", "Ticker"], ["strategy", "Strategi"],
     ["entry_price", "Trigger"], ["entry_price_actual", "Entry"],
     ["stop_loss", "Stop Loss"], ["take_profit", "Take Profit"],
-    ["days_elapsed", "Hari Berjalan"],
+    ["days_in_status", "Hari Berjalan"],
     ["mark_exit_price", "Mark"], ["pnl_display", "Floating PnL"],
   ];
   // Riwayat (tp_hit/sl_hit/closed_timeout/missed): cuma kolom penting --
@@ -657,6 +657,7 @@
     highest_price: s => `<td class="mono">${fmt(s.highest_price)}</td>`,
     outcome_label: s => `<td>${outcomeBadge(s)}</td>`,
     days_elapsed: s => `<td class="mono">${daysElapsed(s)}d</td>`,
+    days_in_status: s => `<td class="mono">${s.days_in_status ?? 0}d</td>`,
     mark_exit_price: s => `<td class="mono">${markExitDisplay(s)}</td>`,
     pnl_display: s => {
       const p = pnlDisplayFor(s);
@@ -1351,7 +1352,10 @@
     html += fieldHtml("Low / High selama jalan", `${fmt(s.lowest_price)} / ${fmt(s.highest_price)}`);
     html += fieldHtml("Mark / Exit", markExitDisplay(s));
     html += fieldHtml("PnL", pnlDisplay.text);
-    html += fieldHtml("Hari Berjalan", daysElapsed(s) + "d");
+    const isOngoing = s.status === "pending" || s.status === "entered";
+    html += fieldHtml(isOngoing ? "Hari Berjalan" : "Hari Ditahan",
+      (isOngoing ? (s.days_in_status ?? 0) : daysElapsed(s)) + "d" +
+      (isOngoing ? " (trading day)" : " (kalender)"));
     if(s.missed_reason) html += fieldHtml("Alasan Gagal", s.missed_reason === "sl_hit_before_entry" ? "SL sebelum sempat entry" : "Habis waktu (expired)");
     html += `</div>`;
 
@@ -1532,14 +1536,17 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.6
-- Tabel baru di Supabase: ticker_sector (ticker, sector, industry), diisi
-  dari data Musaffa Q2 2026 (199 baris, sama dengan UNIVERSE terbaru).
-  Read-only utk anon/authenticated, sama kayak tabel lain.
-- Exposure Snapshot (tab Posisi Aktif) sekarang punya panel "Konsentrasi
-  per Sektor" -- jumlah posisi, nilai posisi, % dari total invested, dan
-  risiko ke SL per sektor. Kartu "Alokasi Terbesar" di stats grid diganti
-  "Sektor Terbesar" (alokasi terbesar per-ticker dipindah ke note di
-  bawah grid, bukan dihapus). Sebelumnya konsentrasi cuma bisa dihitung
-  per ticker karena nggak ada data sektor di database sama sekali.
+v3.7
+- 'Hari Berjalan' di tab Posisi Aktif sekarang pakai days_in_status
+  (trading day, sumber dari backend signal_engine.py) -- bukan hitung
+  kalender (days_elapsed) lagi. Cron cuma jalan hari kerja, jadi
+  days_in_status otomatis ngitung hari bursa, konsisten sama threshold
+  ENTRY_WINDOW_DAYS=3 / HOLDING_PERIOD_DAYS=10 yang beneran dipakai
+  produksi -- sebelumnya kalender bisa lebih besar dari trading day
+  kalau ada weekend di antaranya, jadi nggak match sama logic asli.
+  'Hari Ditahan' di tab Riwayat TETAP kalender (durasi riil trade
+  selesai), cuma Posisi Aktif yang diubah.
+- Modal detail per baris ikut nyesuaikan: label & sumber data (trading
+  day vs kalender) sekarang tergantung status baris (ongoing vs
+  resolved), bukan selalu kalender.
 -->
