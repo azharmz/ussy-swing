@@ -366,7 +366,7 @@
   // ============================================
   // Paper Trading — simulasi portofolio dari trade_signals aktual.
   // Ini SIMULASI ilustratif, bukan transaksi riil di broker. Asumsi (bisa diubah di sini):
-  //   - modal awal $20,000
+  //   - modal awal $40,000
   //   - tiap sinyal dieksekusi diberi porsi 2% dari equity saat entry (bukan 10% --
   //     volume sinyal live ternyata jauh lebih tinggi dari retail biasa: overlap
   //     posisi bersamaan pernah tembus 50 dalam 3 minggu observasi pertama, jadi
@@ -375,7 +375,7 @@
   //   - maks 60 posisi terbuka bersamaan (buffer di atas rekor 50) — kas juga jadi
   //     pengaman alami: kalau cash < ukuran posisi berikutnya, sinyal itu di-skip
   // ============================================
-  const PAPER_START_CAPITAL = 20000;   // modal awal simulasi, USD
+  const PAPER_START_CAPITAL = 40000;   // modal awal simulasi, USD
   const PAPER_SIZE_PCT = 0.02;         // ukuran posisi = 2% equity saat entry
   const PAPER_MAX_CONCURRENT = 60;     // maks posisi terbuka bersamaan (buffer di atas rekor 50)
 
@@ -1511,16 +1511,11 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.8
-- Kelewat di v3.7: "Hari Ditahan" di tab Riwayat masih pakai days_elapsed
-  (kalender) padahal seharusnya ikut diganti days_in_status juga, sekarang
-  konsisten sama Posisi Aktif -- karena signal_engine.py v3 udah nge-fix
-  days_in_status akurat sampai hari terakhir buat SEMUA status (termasuk
-  resolved & missed), jadi aman dipakai di semua konteks.
-- Simplifikasi: fungsi daysElapsed() (kalender) dan kolom days_elapsed
-  di CELL_RENDERERS dihapus total dari frontend, sudah nggak dipakai
-  sama sekali -- semua "Hari Berjalan"/"Hari Ditahan" sekarang seragam
-  dari days_in_status (trading day, sumber backend). View trade_signals_v
-  (Supabase) masih punya kolom days_elapsed tapi sekarang unused, nggak
-  masalah dibiarkan (harmless), bisa di-cleanup nanti kalau mau.
+v3.9
+- Modal awal simulasi Paper Trading dinaikin dari $20.000 -> $40.000
+  (PAPER_START_CAPITAL). Trading Balance mulai menipis seiring jumlah
+  posisi aktif terus bertambah (30+ entered, sizing 2%/trade). PENTING:
+  ini basis buat SELURUH simulasi sejak 23 Juli, bukan "top up" kas
+  sekarang doang -- semua histori (Total Equity, Drawdown, dst) otomatis
+  kehitung ulang pakai modal baru ini, bukan cuma ke depan.
 -->
