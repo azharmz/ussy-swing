@@ -711,9 +711,9 @@
     if(s.status === "pending" || s.status === "entered"){
       return s.mark_price == null ? "—" : fmt(s.mark_price);
     }
-    if(s.status === "tp_hit") return `TP @ ${fmt(s.exit_price)}`;
-    if(s.status === "sl_hit") return `SL @ ${fmt(s.exit_price)}`;
-    if(s.status === "closed_timeout") return fmt(s.exit_price);
+    if(s.status === "tp_hit" || s.status === "sl_hit" || s.status === "closed_timeout"){
+      return fmt(s.exit_price);
+    }
     return "—"; // missed -- nggak pernah ada posisi, nggak ada harga relevan
   }
 
@@ -1511,11 +1511,8 @@
 </html>
 <!--
 CHANGELOG (versi terakhir saja, tanpa tanggal -- Claude nggak reliable soal waktu real-time)
-v3.9
-- Modal awal simulasi Paper Trading dinaikin dari $20.000 -> $40.000
-  (PAPER_START_CAPITAL). Trading Balance mulai menipis seiring jumlah
-  posisi aktif terus bertambah (30+ entered, sizing 2%/trade). PENTING:
-  ini basis buat SELURUH simulasi sejak 23 Juli, bukan "top up" kas
-  sekarang doang -- semua histori (Total Equity, Drawdown, dst) otomatis
-  kehitung ulang pakai modal baru ini, bukan cuma ke depan.
+v3.10
+- Kolom Exit di tab Riwayat: hapus label "TP @"/"SL @", tinggal angka
+  harga exit-nya aja (kolom Outcome di sebelahnya udah nunjukkin
+  TP/SL/Timeout, jadi label ini cuma dobel info).
 -->
